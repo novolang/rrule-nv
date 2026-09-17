@@ -1,0 +1,329 @@
+// rruleiter.nv — generating the occurrences, one interval at a time.
+//
+// NO FUNCTION HERE ANSWERS AN UNBOUNDED LIST
+//
+// `FREQ=DAILY` with no `COUNT` and no `UNTIL` is a legal rule with
+// infinitely many occurrences, and it is the rule people write first.
+// A library whose `all()` returns a list has one behaviour for it:
+// allocate until the process dies.  Every reference implementation
+// ships that function and every one of them documents the hazard in
+// prose that nobody reads.
+//
+// So the unbounded form here is the CURSOR, which produces one
+// occurrence per `step` and holds a constant amount of memory, and
+// every function that answers a list takes a bound in its arguments
+// — a count, or a window.  `occurrences` without a bound is not a
+// function that exists.  `is_bounded` is the predicate a caller asks
+// first, and `RruleUnboundedRecurrence` is what a caller gets who
+// asked for every occurrence of a rule that has no end.
+//
+// THE GENERATOR WORKS AN INTERVAL AT A TIME, BECAUSE `BYSETPOS` DOES
+//
+// `FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1` is the last weekday
+// of the month.  "Last" is not a property of an occurrence, it is a
+// property of a month's whole set, so the generator expands one
+// interval, applies the limiting parts to it, sorts it, applies
+// `BYSETPOS`, and only then yields.  That is why `RruleCursor`
+// carries a buffer of the current interval's remaining occurrences
+// alongside its position, and why `cursor_position` reports the
+// interval rather than the occurrence count.
+//
+// THE ORDER IS TOTAL AND ASCENDING
+//
+// Occurrences come out in increasing civil order, with duplicates
+// removed: two `RRULE`s that both produce a Monday produce it once,
+// and an `RDATE` equal to a generated occurrence does not double it.
+// RFC 5545 § 3.8.5.3 requires that the recurrence set be a set.  A
+// caller may therefore compare two whole lists in a test.
+
+use civil
+use rruleerror
+use rruleset
+
+// A generation in progress over a recurrence set.
+//
+// A value: `step` answers a new cursor, so a caller may keep one,
+// copy one, or restart from one it kept.
+//
+// ```novo
+// use civil
+// use rruleiter
+// use rruleset
+//
+// fn main() [io]
+//     match civil.date(2026, 1, 5)
+//         Err(_) => println("not a date")
+//         Ok(d)  =>
+//             let s = rruleset.set(civil.datetime(d, civil.midnight()), true)
+//             println("${rruleiter.cursor_position(rruleiter.cursor(s))}")    // 0
+// ```
+pub struct RruleCursor
+    // The set being generated from.
+    source: rruleset.RruleSet
+    // Which interval the generator has reached, counting from zero at
+    // the `DTSTART`'s own interval.
+    interval: Int
+    // The occurrences of the current interval that have not been
+    // yielded yet, in order.  This is the buffer `BYSETPOS` needs.
+    pending: [civil.CivilDateTime]
+    // How many occurrences have been yielded, which is what a `COUNT`
+    // is compared against.
+    yielded: Int
+
+// What one `step` produced.
+//
+// ```novo
+// use civil
+// use rruleiter
+// use rruleset
+//
+// fn main() [io]
+//     match civil.date(2026, 1, 5)
+//         Err(_) => println("not a date")
+//         Ok(d)  =>
+//             let s = rruleset.set(civil.datetime(d, civil.midnight()), true)
+//             let st = rruleiter.step(rruleiter.cursor(s))
+//             match st.found
+//                 Some(o) => println("${o.date.day}")
+//                 None    => println("the recurrence is exhausted")
+// ```
+pub struct RruleStep
+    // The cursor to hand to the next `step`.
+    next: RruleCursor
+    // The occurrence, or `None` when the recurrence is exhausted.  A
+    // `None` is final: stepping the returned cursor answers `None`
+    // again.
+    found: ?civil.CivilDateTime
+
+// A cursor at the start of a set.
+//
+// The first `step` yields the `DTSTART`, whether or not the rules
+// would have produced it — see `rruleset.is_synchronized`.
+//
+// ```novo
+// use civil
+// use rruleiter
+// use rruleset
+//
+// fn main() [io]
+//     match civil.date(2026, 1, 5)
+//         Err(_) => println("not a date")
+//         Ok(d)  =>
+//             let s = rruleset.set(civil.datetime(d, civil.midnight()), true)
+//             println("${rruleiter.cursor_position(rruleiter.cursor(s))}")
+// ```
+pub fn cursor(s: rruleset.RruleSet) -> RruleCursor []
+    todo("rrule-nv.rruleiter.cursor")
+
+// A cursor positioned so that the next `step` yields the first
+// occurrence at or after an instant.
+//
+// The whole point of it is that it does not require generating
+// everything before that instant one at a time: a caller painting
+// next month's calendar starts there.  An instant before the
+// `DTSTART` gives the same cursor as `cursor`.
+//
+// ```novo
+// use civil
+// use rruleiter
+// use rruleset
+//
+// fn main() [io]
+//     match civil.date(2026, 6, 1)
+//         Err(_) => println("not a date")
+//         Ok(d)  =>
+//             let at = civil.datetime(d, civil.midnight())
+//             let s = rruleset.set(at, true)
+//             println("${rruleiter.cursor_position(rruleiter.cursor_from(s, at))}")
+// ```
+pub fn cursor_from(s: rruleset.RruleSet, at: civil.CivilDateTime) -> RruleCursor []
+    todo("rrule-nv.rruleiter.cursor_from")
+
+// Which interval the cursor has reached, counting from zero.
+//
+// The interval and not the occurrence count, because `BYSETPOS` makes
+// the two different numbers and because an interval is what a caller
+// resuming a generation has to be positioned on.
+//
+// ```novo
+// use civil
+// use rruleiter
+// use rruleset
+//
+// fn main() [io]
+//     match civil.date(2026, 1, 5)
+//         Err(_) => println("not a date")
+//         Ok(d)  =>
+//             let s = rruleset.set(civil.datetime(d, civil.midnight()), true)
+//             println("${rruleiter.cursor_position(rruleiter.cursor(s))}")    // 0
+// ```
+pub fn cursor_position(c: RruleCursor) -> Int []
+    todo("rrule-nv.rruleiter.cursor_position")
+
+// One occurrence, and the cursor that follows it.
+//
+// The only form that works for a rule with no end.
+//
+// ```novo
+// use civil
+// use rruleiter
+// use rruleset
+//
+// fn main() [io]
+//     match civil.date(2026, 1, 5)
+//         Err(_) => println("not a date")
+//         Ok(d)  =>
+//             var c = rruleiter.cursor(rruleset.set(civil.datetime(d, civil.midnight()), true))
+//             var n = 0
+//             loop
+//                 let st = rruleiter.step(c)
+//                 match st.found
+//                     None    => break
+//                     Some(_) => n += 1
+//                 if n >= 10
+//                     break
+//                 c = st.next
+//             println("${n}")
+// ```
+pub fn step(c: RruleCursor) -> RruleStep []
+    todo("rrule-nv.rruleiter.step")
+
+// The first `limit` occurrences, or every occurrence when the rule
+// ends before that.
+//
+// The bound is an argument and has no default, which is the whole of
+// this module's safety story: there is no call here that can run
+// forever by accident.
+//
+// ```novo
+// use civil
+// use rrulespec
+// use rruleiter
+// use rruleset
+//
+// fn main() [io]
+//     match civil.date(2026, 1, 5)
+//         Err(_) => println("not a date")
+//         Ok(d)  =>
+//             let s = rruleset.set(civil.datetime(d, civil.midnight()), true)
+//             let daily = rruleset.with_rule(s, rrulespec.rule(RruleDaily))
+//             println("${list.len(rruleiter.occurrences(daily, 5))}")     // 5
+// ```
+pub fn occurrences(s: rruleset.RruleSet, limit: Int) -> [civil.CivilDateTime] []
+    todo("rrule-nv.rruleiter.occurrences")
+
+// Every occurrence in a window, inclusive of both ends.
+//
+// The window is the bound, so this is safe on a rule with no end and
+// is what a calendar view calls.
+//
+// ```novo
+// use civil
+// use rrulespec
+// use rruleiter
+// use rruleset
+//
+// fn main() [io]
+//     match civil.date(2026, 1, 1)
+//         Err(_) => println("not a date")
+//         Ok(jan) =>
+//             let from = civil.datetime(jan, civil.midnight())
+//             let s = rruleset.with_rule(rruleset.set(from, true), rrulespec.rule(RruleDaily))
+//             println("${list.len(rruleiter.between(s, from, from))}")    // 1
+// ```
+pub fn between(s: rruleset.RruleSet, from: civil.CivilDateTime,
+               to: civil.CivilDateTime) -> [civil.CivilDateTime] []
+    todo("rrule-nv.rruleiter.between")
+
+// The first occurrence strictly after an instant, or `None` when the
+// rule ends before one.
+//
+// What a scheduler asks: given where we are, when is the next one.
+//
+// ```novo
+// use civil
+// use rrulespec
+// use rruleiter
+// use rruleset
+//
+// fn main() [io]
+//     match civil.date(2026, 1, 5)
+//         Err(_) => println("not a date")
+//         Ok(d)  =>
+//             let at = civil.datetime(d, civil.midnight())
+//             let s = rruleset.with_rule(rruleset.set(at, true), rrulespec.rule(RruleDaily))
+//             match rruleiter.after(s, at)
+//                 Some(o) => println("${o.date.day}")       // 6
+//                 None    => println("no further occurrence")
+// ```
+pub fn after(s: rruleset.RruleSet, at: civil.CivilDateTime) -> ?civil.CivilDateTime []
+    todo("rrule-nv.rruleiter.after")
+
+// The last occurrence strictly before an instant, or `None`.
+//
+// What an audit asks: which occurrence was this event, given when it
+// happened.
+//
+// ```novo
+// use civil
+// use rrulespec
+// use rruleiter
+// use rruleset
+//
+// fn main() [io]
+//     match civil.date(2026, 1, 5)
+//         Err(_) => println("not a date")
+//         Ok(d)  =>
+//             let at = civil.datetime(d, civil.midnight())
+//             let s = rruleset.with_rule(rruleset.set(at, true), rrulespec.rule(RruleDaily))
+//             match rruleiter.before(s, at)
+//                 Some(_) => println("there was an earlier one")
+//                 None    => println("this is the first")
+// ```
+pub fn before(s: rruleset.RruleSet, at: civil.CivilDateTime) -> ?civil.CivilDateTime []
+    todo("rrule-nv.rruleiter.before")
+
+// How many occurrences the set has in total.
+//
+// `RruleUnboundedRecurrence` when it has infinitely many, which is
+// the refusal that keeps this function from being the one that hangs.
+//
+// ```novo
+// use civil
+// use rrulespec
+// use rruleiter
+// use rruleset
+//
+// fn main() [io]
+//     match civil.date(2026, 1, 5)
+//         Err(_) => println("not a date")
+//         Ok(d)  =>
+//             let s = rruleset.set(civil.datetime(d, civil.midnight()), true)
+//             let daily = rruleset.with_rule(s, rrulespec.rule(RruleDaily))
+//             match rruleiter.count_occurrences(daily)
+//                 Ok(n)  => println("${n}")
+//                 Err(_) => println("this rule has no end")
+// ```
+pub fn count_occurrences(s: rruleset.RruleSet) -> Result<Int, rruleerror.RruleError> []
+    todo("rrule-nv.rruleiter.count_occurrences")
+
+// Whether the set has finitely many occurrences.
+//
+// True when every rule in it ends, and true for a set with no rules
+// at all.  The question `count_occurrences` refuses on, asked
+// beforehand.
+//
+// ```novo
+// use civil
+// use rruleiter
+// use rruleset
+//
+// fn main() [io]
+//     match civil.date(2026, 1, 5)
+//         Err(_) => println("not a date")
+//         Ok(d)  =>
+//             let s = rruleset.set(civil.datetime(d, civil.midnight()), true)
+//             println("${rruleiter.is_bounded(s)}")       // true
+// ```
+pub fn is_bounded(s: rruleset.RruleSet) -> Bool []
+    todo("rrule-nv.rruleiter.is_bounded")

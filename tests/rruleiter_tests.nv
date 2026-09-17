@@ -1,0 +1,169 @@
+// rruleiter_tests.nv — generation: the DTSTART rule, the set
+// operations, BYSETPOS, and the bound every list-returning call takes.
+//
+// RED ON PURPOSE.  The series are RFC 5545 § 3.8.5.3's worked
+// examples, recomputed on a 2026 calendar so the weekdays are checkable
+// by hand: 2026-01-05 is a Monday and 2026-01-07 a Wednesday.
+
+use std.test
+use civil
+use rruleerror
+use rruleiter
+use rrulefreq
+use rrulespec
+use rruleset
+
+// 2026-01-<day> at midnight.  A helper rather than four lines at
+// every call site.
+fn jan(day: Int) -> civil.CivilDateTime
+    match civil.date(2026, 1, day)
+        Ok(d)  => civil.datetime(d, civil.midnight())
+        Err(_) => civil.datetime(civil.date_from_epoch_day(0), civil.midnight())
+
+@test
+fn test_the_dtstart_is_always_the_first_occurrence() [io]
+    // RFC 5545 § 3.8.5.3 says so.  It also says a DTSTART not
+    // synchronised with the rule gives an undefined recurrence set,
+    // which is the hole implementations fill differently.  This
+    // package yields the DTSTART and publishes the predicate.
+    test.case("a Wednesday start under FREQ=WEEKLY;BYDAY=MO is still yielded")
+    let wed = jan(7)
+    let byday = rrulespec.with_by_day(rrulespec.rule(RruleWeekly),
+                                      [rrulefreq.weekday_num(Mon, 0)])
+    let s = rruleset.with_rule(rruleset.set(wed, true), byday)
+    let first = rruleiter.occurrences(s, 3)
+    test.assert(list.len(first) == 3)
+    test.assert(first[0].date.day == 7)
+
+    test.case("and the caller is told the rule would not have produced it")
+    test.assert(rruleset.is_synchronized(s) == false)
+
+    test.case("a Monday start under the same rule is synchronised")
+    let mon = rruleset.with_rule(rruleset.set(jan(5), true), byday)
+    test.assert(rruleset.is_synchronized(mon))
+
+@test
+fn test_no_call_here_can_run_forever_by_accident() [io]
+    test.case("FREQ=DAILY with no end is unbounded, and says so")
+    let daily = rruleset.with_rule(rruleset.set(jan(5), true),
+                                   rrulespec.rule(RruleDaily))
+    test.assert(rruleiter.is_bounded(daily) == false)
+
+    test.case("counting its occurrences is refused rather than attempted")
+    match rruleiter.count_occurrences(daily)
+        Ok(_)  => test.fail("an endless rule has no count")
+        Err(e) => test.assert(rruleerror.code(e) == "unbounded-recurrence")
+
+    test.case("but a bounded call over it is fine, because the bound is an argument")
+    test.assert(list.len(rruleiter.occurrences(daily, 5)) == 5)
+    test.assert(list.len(rruleiter.between(daily, jan(5), jan(11))) == 7)
+
+    test.case("a COUNT makes the set bounded and countable")
+    let counted = rruleset.with_rule(
+                      rruleset.set(jan(5), true),
+                      rrulespec.with_end(rrulespec.rule(RruleDaily), RruleCount(4)))
+    test.assert(rruleiter.is_bounded(counted))
+    match rruleiter.count_occurrences(counted)
+        Err(_) => test.fail("a COUNT rule has a count")
+        Ok(n)  => test.assert(n == 4)
+
+    test.case("and a bound larger than the series gives the series")
+    test.assert(list.len(rruleiter.occurrences(counted, 100)) == 4)
+
+@test
+fn test_exdate_is_applied_last_and_beats_rdate() [io]
+    // RFC 5545 § 3.8.5.1 fixes the order.  The other order produces a
+    // cancelled meeting that reappears.
+    test.case("an RDATE adds an occurrence the rules did not produce")
+    let weekly = rrulespec.with_end(rrulespec.rule(RruleWeekly), RruleCount(2))
+    let base = rruleset.with_rule(rruleset.set(jan(5), true), weekly)
+    let moved = rruleset.with_rdate(base, jan(8))
+    test.assert(list.len(rruleiter.occurrences(moved, 10)) == 3)
+
+    test.case("an EXDATE removes one, whatever produced it")
+    test.assert(list.len(rruleiter.occurrences(
+        rruleset.with_exdate(moved, jan(12)), 10)) == 2)
+
+    test.case("and a date in both is excluded")
+    test.assert(list.len(rruleiter.occurrences(
+        rruleset.with_exdate(moved, jan(8)), 10)) == 2)
+
+    test.case("the set reports what it holds")
+    test.assert(rruleset.rule_count(moved) == 1)
+    test.assert(list.len(moved.rdates) == 1)
+    test.assert(rruleset.dtstart_of(moved).date.day == 5)
+    test.assert(rruleset.is_date_valued(moved))
+
+@test
+fn test_the_cursor_is_the_only_unbounded_form() [io]
+    test.case("stepping an endless rule yields forever, so the caller stops")
+    let daily = rruleset.with_rule(rruleset.set(jan(5), true),
+                                   rrulespec.rule(RruleDaily))
+    var c = rruleiter.cursor(daily)
+    test.assert(rruleiter.cursor_position(c) == 0)
+    var n = 0
+    loop
+        let st = rruleiter.step(c)
+        match st.found
+            None    =>
+                break
+            Some(_) =>
+                n += 1
+        if n >= 10
+            break
+        c = st.next
+    test.assert(n == 10)
+
+    test.case("a finite rule ends on its own")
+    let counted = rruleset.with_rule(
+                      rruleset.set(jan(5), true),
+                      rrulespec.with_end(rrulespec.rule(RruleDaily), RruleCount(2)))
+    var d = rruleiter.cursor(counted)
+    var m = 0
+    loop
+        let st = rruleiter.step(d)
+        match st.found
+            None    =>
+                break
+            Some(_) =>
+                m += 1
+        d = st.next
+    test.assert(m == 2)
+
+    test.case("a cursor can start at an instant without generating what is behind it")
+    test.assert(rruleiter.cursor_position(rruleiter.cursor_from(daily, jan(20))) > 0)
+
+@test
+fn test_the_neighbours_of_an_instant() [io]
+    let daily = rruleset.with_rule(rruleset.set(jan(5), true),
+                                   rrulespec.rule(RruleDaily))
+
+    test.case("after is strictly after")
+    match rruleiter.after(daily, jan(5))
+        None    => test.fail("a daily rule has a next occurrence")
+        Some(o) => test.assert(o.date.day == 6)
+
+    test.case("before is strictly before, and the first occurrence has none")
+    test.assert_none(rruleiter.before(daily, jan(5)))
+    match rruleiter.before(daily, jan(7))
+        None    => test.fail("there are two occurrences before the 7th")
+        Some(o) => test.assert(o.date.day == 6)
+
+@test
+fn test_a_set_is_checked_against_its_dtstart() [io]
+    test.case("a well-formed set has no problems")
+    let ok = rruleset.with_rule(rruleset.set(jan(5), true),
+                                rrulespec.rule(RruleWeekly))
+    test.assert(list.len(rruleset.check_set(ok)) == 0)
+
+    test.case("a date-valued set carrying BYHOUR is refused")
+    let timed = rrulespec.with_by_time(rrulespec.rule(RruleDaily), [9], [], [])
+    let bad = rruleset.with_rule(rruleset.set(jan(5), true), timed)
+    test.assert(list.len(rruleset.check_set(bad)) == 1)
+
+    test.case("an UNTIL whose value type is not the DTSTART's is refused")
+    let until = rrulespec.with_end(rrulespec.rule(RruleDaily), RruleUntil(jan(31)))
+    let mismatched = rruleset.with_rule(rruleset.set(jan(5), false), until)
+    let problems = rruleset.check_set(mismatched)
+    test.assert(list.len(problems) == 1)
+    test.assert(rruleerror.code(problems[0]) == "until-kind-mismatch")

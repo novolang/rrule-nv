@@ -1,0 +1,366 @@
+// rrulespec.nv — the recurrence rule as a value, and the table that
+// decides what it means.
+//
+// EXPANSION AND LIMITATION, AND WHY THE TABLE IS PUBLIC
+//
+// RFC 5545 § 3.3.10 carries a table with one row per `BYxxx` part and
+// one column per frequency, and every cell says one of two words:
+// the part EXPANDS the set the frequency generated, or it LIMITS it.
+// That table is not a detail of an implementation.  It is the whole
+// of what a rule means, and it is the single thing every recurrence
+// library has got wrong at least once.
+//
+// The cost of getting a cell wrong is that the rule still runs.
+// `FREQ=WEEKLY;BYMONTH=1` limits — it keeps the weekly occurrences
+// that fall in January — and an implementation that expanded it
+// instead produces one occurrence per January per week, which is a
+// series that looks plausible and is not the one anybody wrote.  No
+// exception is raised, nothing is logged, and the person who finds
+// out is the one who missed a meeting.
+//
+// So `part_role` is public, it is total, and it is the function the
+// generator itself is built out of.  A caller that wants to explain a
+// rule to a person can ask it; a test can assert the whole table
+// against the RFC's own printed copy.
+//
+// AND IT IS NOT A FUNCTION OF THE FREQUENCY ALONE
+//
+// Two of the table's cells carry footnotes, and both are about
+// `BYDAY`.  Under `MONTHLY`, `BYDAY` expands — unless `BYMONTHDAY` is
+// also present, in which case it limits.  Under `YEARLY` the same
+// holds for `BYMONTHDAY` and `BYYEARDAY` together.  So a signature
+// `fn part_role(freq, part)` would be UNABLE TO GIVE THE RIGHT
+// ANSWER, and every library whose internals are shaped that way has a
+// special case somewhere else that the table does not explain.
+// `part_role` takes the whole rule.
+//
+// `BYSETPOS` IS APPLIED LAST, TO ONE INTERVAL AT A TIME
+//
+// `FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1` is the last weekday
+// of the month.  It cannot be computed from a stream of occurrences,
+// because "last" is only meaningful once a whole month's set exists.
+// That is why the generator in `rruleiter` produces an interval at a
+// time rather than an occurrence at a time, and why `BYSETPOS` with
+// no other part is refused rather than ignored.
+
+use civil
+use rruleerror
+use rrulefreq
+
+// What a `BYxxx` part does to the set its frequency generated.
+//
+// ```novo
+// use rrulespec
+//
+// fn main() [io]
+//     println(rrulespec.role_name(RruleExpands))     // expands
+// ```
+pub enum RruleExpansion
+    // The part multiplies the set: each occurrence the frequency
+    // produced becomes one occurrence per value of the part.
+    RruleExpands
+    // The part filters the set: an occurrence survives only if it
+    // agrees with one of the part's values.
+    RruleLimits
+    // The part is not applicable to this frequency at all, and a rule
+    // carrying it is refused rather than run.
+    RruleNotApplicable
+
+// When a rule stops.
+//
+// ```novo
+// use rrulespec
+//
+// fn main() [io]
+//     match rrulespec.end_count(RruleCount(10))
+//         Some(n) => println("${n}")      // 10
+//         None    => println("no count")
+// ```
+pub enum RruleEnd
+    // The rule generates occurrences forever.  This is the default,
+    // and it is why no function in `rruleiter` answers a list without
+    // a bound.
+    RruleNever
+    // The rule generates exactly this many occurrences, counting the
+    // `DTSTART` as the first.
+    RruleCount(n: Int)
+    // The rule generates occurrences up to and including this
+    // instant.  Its value type must match `DTSTART`'s; see
+    // `RruleUntilKindMismatch`.
+    RruleUntil(at: civil.CivilDateTime)
+
+// A recurrence rule: one `FREQ`, an interval, an end, a week start,
+// and the nine `BYxxx` lists.
+//
+// Every list is empty in a rule built by `rule`, and an empty list
+// means the part is absent — which is not the same as a part present
+// with no values, a thing RFC 5545's grammar cannot express.
+//
+// ```novo
+// use rrulespec
+//
+// fn main() [io]
+//     let r = rrulespec.with_interval(rrulespec.rule(RruleWeekly), 2)
+//     println("${r.interval}")        // 2
+// ```
+pub struct Rrule
+    // The frequency.  The one part RFC 5545 § 3.3.10 requires.
+    freq: rrulefreq.RruleFreq
+    // How many frequency units between intervals.  Positive; `1`
+    // unless `INTERVAL` said otherwise.
+    interval: Int
+    // When the rule stops.
+    end: RruleEnd
+    // The day a week starts on, which decides which occurrences of a
+    // weekly rule fall in which interval and which week an ISO week
+    // number names.  RFC 5545's default is Monday.
+    wkst: civil.Weekday
+    // `BYSECOND`.
+    by_second: [Int]
+    // `BYMINUTE`.
+    by_minute: [Int]
+    // `BYHOUR`.
+    by_hour: [Int]
+    // `BYDAY`, each value a weekday with an ordinal.
+    by_day: [rrulefreq.RruleWeekdayNum]
+    // `BYMONTHDAY`, negative values counting from the end of the
+    // month.
+    by_monthday: [Int]
+    // `BYYEARDAY`, negative values counting from the end of the year.
+    by_yearday: [Int]
+    // `BYWEEKNO`, only under a yearly rule.
+    by_weekno: [Int]
+    // `BYMONTH`.
+    by_month: [Int]
+    // `BYSETPOS`, applied last to one interval's set.
+    by_setpos: [Int]
+
+// A rule with a frequency and nothing else: interval 1, no end, week
+// starting on Monday, every `BYxxx` list empty.
+//
+// ```novo
+// use rrulefreq
+// use rrulespec
+//
+// fn main() [io]
+//     let r = rrulespec.rule(RruleDaily)
+//     println(rrulefreq.freq_name(r.freq))      // DAILY
+// ```
+pub fn rule(freq: rrulefreq.RruleFreq) -> Rrule []
+    todo("rrule-nv.rrulespec.rule")
+
+// The same rule with a different `INTERVAL`.
+//
+// The value is not checked here — a constructor has no error channel
+// — and `check` is where a zero or negative interval is refused.
+//
+// ```novo
+// use rrulespec
+//
+// fn main() [io]
+//     println("${rrulespec.with_interval(rrulespec.rule(RruleDaily), 3).interval}")
+// ```
+pub fn with_interval(r: Rrule, interval: Int) -> Rrule []
+    todo("rrule-nv.rrulespec.with_interval")
+
+// The same rule with a different end.
+//
+// ```novo
+// use rrulespec
+//
+// fn main() [io]
+//     let r = rrulespec.with_end(rrulespec.rule(RruleDaily), RruleCount(5))
+//     println("${rrulespec.is_finite(r)}")      // true
+// ```
+pub fn with_end(r: Rrule, end: RruleEnd) -> Rrule []
+    todo("rrule-nv.rrulespec.with_end")
+
+// The same rule with a different week start.
+//
+// It changes the answer for a weekly rule with an interval above one,
+// and for any rule using `BYWEEKNO`.  `FREQ=WEEKLY;INTERVAL=2;BYDAY=SU,MO`
+// puts the Sunday and the Monday in the same interval under
+// `WKST=SU` and in different intervals under `WKST=MO`, which is a
+// two-week difference in a fortnightly rota.
+//
+// ```novo
+// use civil
+// use rrulespec
+//
+// fn main() [io]
+//     let r = rrulespec.with_wkst(rrulespec.rule(RruleWeekly), Sun)
+//     println("${civil.weekday_number(r.wkst)}")     // 7
+// ```
+pub fn with_wkst(r: Rrule, wkst: civil.Weekday) -> Rrule []
+    todo("rrule-nv.rrulespec.with_wkst")
+
+// The same rule with a `BYDAY` list.
+//
+// ```novo
+// use civil
+// use rrulefreq
+// use rrulespec
+//
+// fn main() [io]
+//     let last_fri = rrulefreq.weekday_num(Fri, -1)
+//     let r = rrulespec.with_by_day(rrulespec.rule(RruleMonthly), [last_fri])
+//     println("${list.len(r.by_day)}")       // 1
+// ```
+pub fn with_by_day(r: Rrule, by_day: [rrulefreq.RruleWeekdayNum]) -> Rrule []
+    todo("rrule-nv.rrulespec.with_by_day")
+
+// The same rule with a `BYMONTH` list.
+//
+// ```novo
+// use rrulespec
+//
+// fn main() [io]
+//     let r = rrulespec.with_by_month(rrulespec.rule(RruleYearly), [1, 7])
+//     println("${list.len(r.by_month)}")     // 2
+// ```
+pub fn with_by_month(r: Rrule, by_month: [Int]) -> Rrule []
+    todo("rrule-nv.rrulespec.with_by_month")
+
+// The same rule with a `BYMONTHDAY` list.
+//
+// ```novo
+// use rrulespec
+//
+// fn main() [io]
+//     let r = rrulespec.with_by_monthday(rrulespec.rule(RruleMonthly), [-1])
+//     println("${r.by_monthday[0]}")         // -1
+// ```
+pub fn with_by_monthday(r: Rrule, by_monthday: [Int]) -> Rrule []
+    todo("rrule-nv.rrulespec.with_by_monthday")
+
+// The same rule with a `BYYEARDAY` list.
+//
+// ```novo
+// use rrulespec
+//
+// fn main() [io]
+//     let r = rrulespec.with_by_yearday(rrulespec.rule(RruleYearly), [1, -1])
+//     println("${list.len(r.by_yearday)}")   // 2
+// ```
+pub fn with_by_yearday(r: Rrule, by_yearday: [Int]) -> Rrule []
+    todo("rrule-nv.rrulespec.with_by_yearday")
+
+// The same rule with a `BYWEEKNO` list.
+//
+// Only a yearly rule may carry one; `check` answers
+// `RruleByWeekNoNeedsYearly` for any other.
+//
+// ```novo
+// use rrulespec
+//
+// fn main() [io]
+//     let r = rrulespec.with_by_weekno(rrulespec.rule(RruleYearly), [20])
+//     println("${r.by_weekno[0]}")           // 20
+// ```
+pub fn with_by_weekno(r: Rrule, by_weekno: [Int]) -> Rrule []
+    todo("rrule-nv.rrulespec.with_by_weekno")
+
+// The same rule with a `BYSETPOS` list.
+//
+// ```novo
+// use civil
+// use rrulefreq
+// use rrulespec
+//
+// fn main() [io]
+//     let weekdays = [rrulefreq.weekday_num(Mon, 0), rrulefreq.weekday_num(Fri, 0)]
+//     let r = rrulespec.with_by_day(rrulespec.rule(RruleMonthly), weekdays)
+//     println("${list.len(rrulespec.with_by_setpos(r, [-1]).by_setpos)}")    // 1
+// ```
+pub fn with_by_setpos(r: Rrule, by_setpos: [Int]) -> Rrule []
+    todo("rrule-nv.rrulespec.with_by_setpos")
+
+// The same rule with `BYHOUR`, `BYMINUTE` and `BYSECOND` lists.
+//
+// One function rather than three, because a rule that sets any of the
+// three almost always sets the ones below it: `BYHOUR=9` on its own
+// takes the minute and the second from `DTSTART`, which is correct
+// and surprises people.
+//
+// ```novo
+// use rrulespec
+//
+// fn main() [io]
+//     let r = rrulespec.with_by_time(rrulespec.rule(RruleDaily), [9, 17], [0], [0])
+//     println("${list.len(r.by_hour)}")      // 2
+// ```
+pub fn with_by_time(r: Rrule, by_hour: [Int], by_minute: [Int], by_second: [Int]) -> Rrule []
+    todo("rrule-nv.rrulespec.with_by_time")
+
+// What a `BYxxx` part does in THIS rule: expand, limit, or nothing.
+//
+// RFC 5545 § 3.3.10's table, as a total function, with the two `BYDAY`
+// footnotes folded in — which is why it takes the whole rule and not
+// just the frequency.
+//
+// ```novo
+// use rrulefreq
+// use rrulespec
+//
+// fn main() [io]
+//     let weekly = rrulespec.rule(RruleWeekly)
+//     println(rrulespec.role_name(rrulespec.part_role(weekly, RrulePartByMonth)))
+// ```
+pub fn part_role(r: Rrule, part: rrulefreq.RrulePart) -> RruleExpansion []
+    todo("rrule-nv.rrulespec.part_role")
+
+// The role as a stable name: `"expands"`, `"limits"`,
+// `"not-applicable"`.
+//
+// ```novo
+// use rrulespec
+//
+// fn main() [io]
+//     println(rrulespec.role_name(RruleLimits))      // limits
+// ```
+pub fn role_name(e: RruleExpansion) -> Str []
+    todo("rrule-nv.rrulespec.role_name")
+
+// Whether the rule generates finitely many occurrences.
+//
+// True when the end is a `COUNT` or an `UNTIL`.  A rule with neither
+// generates forever, and `rruleiter` will not answer a list for one.
+//
+// ```novo
+// use rrulespec
+//
+// fn main() [io]
+//     println("${rrulespec.is_finite(rrulespec.rule(RruleDaily))}")     // false
+// ```
+pub fn is_finite(r: Rrule) -> Bool []
+    todo("rrule-nv.rrulespec.is_finite")
+
+// The `COUNT`, or `None` when the rule does not end with one.
+//
+// ```novo
+// use rrulespec
+//
+// fn main() [io]
+//     match rrulespec.end_count(RruleNever)
+//         Some(n) => println("${n}")
+//         None    => println("this rule has no COUNT")
+// ```
+pub fn end_count(e: RruleEnd) -> ?Int []
+    todo("rrule-nv.rrulespec.end_count")
+
+// Every problem with the rule, or an empty list when there is none.
+//
+// Every problem and not the first, because a rule composed by hand
+// usually has more than one and a caller fixing them one refusal per
+// run is a caller who gives up.  The `UNTIL` value-type check is not
+// here — it needs the `DTSTART` and lives in `rruleset.check_set`.
+//
+// ```novo
+// use rrulespec
+//
+// fn main() [io]
+//     let bad = rrulespec.with_interval(rrulespec.rule(RruleDaily), 0)
+//     println("${list.len(rrulespec.check(bad))}")      // 1
+// ```
+pub fn check(r: Rrule) -> [rruleerror.RruleError] []
+    todo("rrule-nv.rrulespec.check")

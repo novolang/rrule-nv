@@ -1,0 +1,125 @@
+// rruleerror.nv — every way a recurrence rule can be refused.
+//
+// THE GRAMMAR AND THE SEMANTICS ARE BOTH REFUSALS, AND THE CALLER
+// NEEDS TO TELL THEM APART
+//
+// Half of these are faults in the text — a part nobody has heard of,
+// a part written twice, a number outside the range RFC 5545 gives it.
+// The other half are rules that parse and cannot mean anything:
+// `COUNT` and `UNTIL` together, a `BYSETPOS` with nothing to select
+// from, an `UNTIL` whose value type disagrees with `DTSTART`'s.
+//
+// The distinction matters because the two arrive from different
+// places.  A grammar fault is in a string somebody typed or a server
+// sent, and the answer is to show the text.  A semantic fault is in a
+// rule somebody composed with the builders in `rrulespec`, and the
+// answer is to fix the program.  `is_grammar_fault` is the divide.
+//
+// UNTIL AND DTSTART ARE THE ONE PEOPLE MEET
+//
+// RFC 5545 § 3.3.10 requires that `UNTIL`'s value type match
+// `DTSTART`'s: a date-valued `DTSTART` takes a date-valued `UNTIL`, a
+// UTC `DTSTART` takes a UTC `UNTIL`.  Implementations coerce instead,
+// and the symptom is a series that ends a day early or a day late for
+// half the year.  Here it is `RruleUntilKindMismatch` with both kinds
+// named.
+
+// Why a recurrence rule, or a set built from one, was refused.
+//
+// ```novo
+// use rruleerror
+//
+// fn main() [io]
+//     println(rruleerror.message(RruleMissingFreq))
+// ```
+pub enum RruleError
+    // The rule has no `FREQ` part.  RFC 5545 § 3.3.10 makes it the
+    // one required part, and a rule without it has no generator at
+    // all.
+    RruleMissingFreq
+    // A part name the specification does not define, carried so the
+    // message can show what was written.  Refused rather than
+    // ignored: an unknown part is usually a misspelt known one, and
+    // ignoring it produces a series that is wrong in exactly the way
+    // the part was meant to prevent.
+    RruleUnknownPart(name: Str)
+    // A part appears twice.  RFC 5545 § 3.3.10 allows each at most
+    // once, and the two spellings of what to do about a repeat —
+    // last wins, first wins — disagree, so neither is chosen.
+    RruleDuplicatePart(name: Str)
+    // `COUNT` and `UNTIL` are both present.  The specification says
+    // they MUST NOT occur in the same rule, because they are two
+    // answers to one question.
+    RruleBothCountAndUntil
+    // `UNTIL`'s value type is not `DTSTART`'s.  `dtstart_kind` and
+    // `until_kind` are `"date"`, `"local"` or `"utc"`.
+    RruleUntilKindMismatch(dtstart_kind: Str, until_kind: Str)
+    // A `BYxxx` value is outside the range the specification gives
+    // it — a `BYMONTH` of 13, a `BYHOUR` of 24, a `BYMONTHDAY` of 0,
+    // a `BYYEARDAY` of 367.
+    RruleValueOutOfRange(part: Str, value: Int)
+    // `INTERVAL` is zero or negative.  RFC 5545 § 3.3.10 requires a
+    // positive integer, and an interval of zero is a rule whose next
+    // occurrence is its previous one.
+    RruleIntervalNotPositive(value: Int)
+    // `BYSETPOS` is present and no other `BYxxx` part is.  It selects
+    // from the set another part expanded, so on its own it selects
+    // from a set of one and is either a no-op or empty.
+    RruleBySetPosWithoutOtherPart
+    // `BYWEEKNO` is present and `FREQ` is not `YEARLY`.  The
+    // specification restricts it to yearly rules, because a week
+    // number is a position within a year.
+    RruleByWeekNoNeedsYearly
+    // A `BYDAY` value carries an ordinal — `+1MO`, `-1SU` — and
+    // `FREQ` is neither `MONTHLY` nor `YEARLY`.  Under a weekly rule
+    // there is only one of each weekday, so the ordinal has nothing
+    // to count.
+    RruleOrdinalWeekdayNeedsMonthlyOrYearly(weekday: Str, ordinal: Int)
+    // A list of occurrences was asked of a rule that generates
+    // infinitely many, with no bound.  See `rruleiter.is_bounded`,
+    // which answers the same question first.
+    RruleUnboundedRecurrence
+
+// The refusal as a sentence, ending without a full stop, suitable for
+// a log line or an error message the caller composes.
+//
+// ```novo
+// use rruleerror
+//
+// fn main() [io]
+//     println(rruleerror.message(RruleDuplicatePart("BYDAY")))
+// ```
+pub fn message(e: RruleError) -> Str []
+    todo("rrule-nv.rruleerror.message")
+
+// A short stable identifier for the refusal: `"missing-freq"`,
+// `"unknown-part"`, `"until-kind-mismatch"` and the rest.
+//
+// Stable across releases, so a caller may branch on it and a test may
+// assert it.
+//
+// ```novo
+// use rruleerror
+//
+// fn main() [io]
+//     println(rruleerror.code(RruleBothCountAndUntil))   // both-count-and-until
+// ```
+pub fn code(e: RruleError) -> Str []
+    todo("rrule-nv.rruleerror.code")
+
+// Whether the refusal is a fault in the text rather than in the rule
+// the text describes.
+//
+// True for the three that only a parser can meet — an unknown part, a
+// repeated part, a value out of range.  False for the rest, which a
+// rule composed in a program reaches just as easily.
+//
+// ```novo
+// use rruleerror
+//
+// fn main() [io]
+//     println("${rruleerror.is_grammar_fault(RruleUnknownPart("BYFORTNIGHT"))}")
+//     println("${rruleerror.is_grammar_fault(RruleBothCountAndUntil)}")
+// ```
+pub fn is_grammar_fault(e: RruleError) -> Bool []
+    todo("rrule-nv.rruleerror.is_grammar_fault")

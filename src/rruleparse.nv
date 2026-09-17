@@ -1,0 +1,172 @@
+// rruleparse.nv — the RECUR grammar, both directions.
+//
+// TWO ENTRY POINTS, BECAUSE THERE ARE TWO THINGS PEOPLE CALL A RRULE
+//
+// `FREQ=WEEKLY;BYDAY=MO` is a RECUR value.  `RRULE:FREQ=WEEKLY;BYDAY=MO`
+// is an iCalendar content line whose property name is `RRULE`.  Both
+// are handed to recurrence libraries daily, and a parser that accepts
+// only one of them fails on half its input, while a parser that
+// accepts either without saying which it got cannot round-trip.  So
+// `parse` takes the value and `parse_line` takes the content line,
+// and each has a printer that emits exactly what it accepts.
+//
+// PRINTING IS CANONICAL, AND THAT IS A DECISION WITH A COST
+//
+// RFC 5545 puts no order on the parts and no case rule on the values
+// beyond requiring `FREQ` first.  `print` emits the parts in the
+// specification's own order, in upper case, with the defaults
+// omitted — so two rules that mean the same thing print the same
+// text, and a stored rule can be compared as a string.
+//
+// The cost is that a rule read from a server and printed back is not
+// byte-identical to what arrived.  That is the right trade for a
+// library whose output is stored and compared, and it is stated here
+// rather than discovered: a caller that must reproduce the original
+// text keeps the original text.
+//
+// WHAT THE PARSER REFUSES RATHER THAN REPAIRS
+//
+// An unknown part, a repeated part and a value outside its range are
+// all refused.  Each of them is a rule that a lenient parser turns
+// into a DIFFERENT rule that runs — and a recurrence that runs and is
+// wrong is found weeks later by somebody who missed an appointment.
+
+use rruleerror
+use rrulespec
+
+// Parse a RECUR value: `"FREQ=WEEKLY;BYDAY=MO,WE;COUNT=10"`.
+//
+// The value only — no `RRULE:` prefix and no parameters.  The part
+// names and the frequency names are matched case-insensitively over
+// ASCII, which is what RFC 5545 § 3.3.10's grammar allows.
+//
+// ```novo
+// use rrulefreq
+// use rruleparse
+//
+// fn main() [io]
+//     match rruleparse.parse("FREQ=WEEKLY;BYDAY=MO,WE;COUNT=10")
+//         Err(_) => println("not a recurrence rule")
+//         Ok(r)  => println(rrulefreq.freq_name(r.freq))     // WEEKLY
+// ```
+pub fn parse(value: Str) -> Result<rrulespec.Rrule, rruleerror.RruleError> []
+    todo("rrule-nv.rruleparse.parse")
+
+// Parse an iCalendar content line whose property is `RRULE`.
+//
+// Accepts `"RRULE:FREQ=DAILY"` and refuses a line naming any other
+// property, because a caller that handed it an `EXDATE` line wanted
+// something this function cannot give and should be told so.
+//
+// ```novo
+// use rrulefreq
+// use rruleparse
+//
+// fn main() [io]
+//     match rruleparse.parse_line("RRULE:FREQ=DAILY;INTERVAL=2")
+//         Err(_) => println("not an RRULE line")
+//         Ok(r)  => println("${r.interval}")                 // 2
+// ```
+pub fn parse_line(line: Str) -> Result<rrulespec.Rrule, rruleerror.RruleError> []
+    todo("rrule-nv.rruleparse.parse_line")
+
+// The rule as a RECUR value, canonically.
+//
+// `FREQ` first, then the other parts in RFC 5545 § 3.3.10's order,
+// upper case, with `INTERVAL=1` and `WKST=MO` omitted because they
+// are the specification's defaults.
+//
+// ```novo
+// use rrulespec
+// use rruleparse
+//
+// fn main() [io]
+//     let r = rrulespec.with_end(rrulespec.rule(RruleDaily), RruleCount(3))
+//     println(rruleparse.print(r))          // FREQ=DAILY;COUNT=3
+// ```
+pub fn print(r: rrulespec.Rrule) -> Str []
+    todo("rrule-nv.rruleparse.print")
+
+// The rule as an iCalendar content line: `print`'s output behind
+// `RRULE:`.
+//
+// The line is not folded.  Folding is a property of the iCalendar
+// stream rather than of a rule, and ical-nv is where it happens.
+//
+// ```novo
+// use rrulespec
+// use rruleparse
+//
+// fn main() [io]
+//     println(rruleparse.print_line(rrulespec.rule(RruleYearly)))   // RRULE:FREQ=YEARLY
+// ```
+pub fn print_line(r: rrulespec.Rrule) -> Str []
+    todo("rrule-nv.rruleparse.print_line")
+
+// The part names the value carries, in the order they were written.
+//
+// The one thing a canonical printer destroys, published so a caller
+// that needs to know what the server actually sent can ask.  A name
+// appears once per occurrence, so a duplicate shows here even though
+// `parse` refuses it.
+//
+// ```novo
+// use rruleparse
+//
+// fn main() [io]
+//     println("${list.len(rruleparse.part_names("FREQ=DAILY;COUNT=3"))}")    // 2
+// ```
+pub fn part_names(value: Str) -> [Str] []
+    todo("rrule-nv.rruleparse.part_names")
+
+// Whether a value parses, without building the rule.
+//
+// For a caller validating a form field, where the reason is shown by
+// `parse` only once the field is submitted.
+//
+// ```novo
+// use rruleparse
+//
+// fn main() [io]
+//     println("${rruleparse.is_valid("FREQ=DAILY")}")        // true
+//     println("${rruleparse.is_valid("EVERY DAY")}")         // false
+// ```
+pub fn is_valid(value: Str) -> Bool []
+    todo("rrule-nv.rruleparse.is_valid")
+
+// The rule as a sentence a person can read: `"every 2 weeks on
+// Monday and Wednesday, 10 times"`.
+//
+// English only, and deliberately so: a translated description needs a
+// message catalogue and a plural rule per language, which is
+// i18n-nv's subject and not this package's.  A caller shipping other
+// languages reads the rule's fields and writes its own.
+//
+// ```novo
+// use rruleparse
+// use rrulespec
+//
+// fn main() [io]
+//     println(rruleparse.describe(rrulespec.rule(RruleDaily)))       // every day
+// ```
+pub fn describe(r: rrulespec.Rrule) -> Str []
+    todo("rrule-nv.rruleparse.describe")
+
+// The `WKST` value as RFC 5545 writes it, or `""` when the rule
+// leaves the default.
+//
+// Published because `WKST` is the part most often dropped by a
+// round-trip, and a fortnightly rota whose week start was lost is out
+// by a week half the time.
+//
+// ```novo
+// use civil
+// use rrulespec
+// use rruleparse
+//
+// fn main() [io]
+//     let r = rrulespec.with_wkst(rrulespec.rule(RruleWeekly), Sun)
+//     println(rruleparse.wkst_text(r))       // SU
+// ```
+pub fn wkst_text(r: rrulespec.Rrule) -> Str []
+    todo("rrule-nv.rruleparse.wkst_text")

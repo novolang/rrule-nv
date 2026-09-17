@@ -1,0 +1,242 @@
+// rrulefreq.nv — the frequency, the nine `BYxxx` parts, and the
+// weekday-with-an-ordinal that `BYDAY` is made of.
+//
+// THE PARTS ARE A CLOSED SET, AND THEY ARE NAMED
+//
+// RFC 5545 § 3.3.10 defines nine `BYxxx` parts and no more.  They are
+// an enum here rather than nine fields checked by nine branches,
+// because the one table that decides what a rule MEANS — which parts
+// expand the set and which parts filter it — is a function of a
+// frequency and a part, and a function over two enums can be written
+// down once and read.  That table is in `rrulespec`, because its
+// answer for `BYDAY` depends on the rest of the rule.
+//
+// `BYDAY` IS A WEEKDAY AND AN ORDINAL, AND THE ORDINAL IS OFTEN ZERO
+//
+// `MO` and `+1MO` are different values: the first is every Monday in
+// the interval, the second is the first Monday of it.  A library that
+// modelled `BYDAY` as a list of weekdays cannot say "the last Friday
+// of the month", which is most of what people write monthly rules
+// for.  So `RruleWeekdayNum` carries both, and an ordinal of zero
+// means every occurrence of that weekday — the specification's own
+// reading of a bare `MO`.
+//
+// A negative ordinal counts from the end: `-1SU` is the last Sunday.
+// That is why the field is a signed integer with a hole at zero
+// rather than an unsigned count.
+
+use civil
+
+// How often a rule recurs, before any `BYxxx` part is applied.
+//
+// ```novo
+// use rrulefreq
+//
+// fn main() [io]
+//     println(rrulefreq.freq_name(RruleMonthly))     // MONTHLY
+// ```
+pub enum RruleFreq
+    // Every second.  Present for completeness; a rule using it
+    // generates 86,400 occurrences a day and almost every caller that
+    // writes one meant `MINUTELY`.
+    RruleSecondly
+    // Every minute.
+    RruleMinutely
+    // Every hour.
+    RruleHourly
+    // Every day.
+    RruleDaily
+    // Every week, starting on the week start — see `wkst` in
+    // `rrulespec.Rrule`, which is what decides where a week begins
+    // and therefore which occurrences fall in which interval.
+    RruleWeekly
+    // Every month.
+    RruleMonthly
+    // Every year.
+    RruleYearly
+
+// One of the nine `BYxxx` parts of RFC 5545 § 3.3.10.
+//
+// ```novo
+// use rrulefreq
+//
+// fn main() [io]
+//     println(rrulefreq.part_name(RrulePartByDay))    // BYDAY
+// ```
+pub enum RrulePart
+    // `BYSECOND`, `0 ..= 60`.  Sixty is allowed, for a leap second.
+    RrulePartBySecond
+    // `BYMINUTE`, `0 ..= 59`.
+    RrulePartByMinute
+    // `BYHOUR`, `0 ..= 23`.
+    RrulePartByHour
+    // `BYDAY`, a list of weekdays each with an optional ordinal.
+    RrulePartByDay
+    // `BYMONTHDAY`, `1 ..= 31` or `-31 ..= -1`.  Never zero.
+    RrulePartByMonthDay
+    // `BYYEARDAY`, `1 ..= 366` or `-366 ..= -1`.  Never zero.
+    RrulePartByYearDay
+    // `BYWEEKNO`, `1 ..= 53` or `-53 ..= -1`, and only under a yearly
+    // rule.  The weeks are ISO 8601's, so which week a day falls in
+    // depends on the week start.
+    RrulePartByWeekNo
+    // `BYMONTH`, `1 ..= 12`.
+    RrulePartByMonth
+    // `BYSETPOS`, `1 ..= 366` or `-366 ..= -1`, applied LAST, to the
+    // set the other parts produced for one interval.
+    RrulePartBySetPos
+
+// A weekday, and which occurrence of it within the interval.
+//
+// ```novo
+// use civil
+// use rrulefreq
+//
+// fn main() [io]
+//     let last_friday = rrulefreq.weekday_num(Fri, -1)
+//     println(rrulefreq.weekday_num_text(last_friday))    // -1FR
+// ```
+pub struct RruleWeekdayNum
+    // The weekday, as calendar-nv spells it.
+    weekday: civil.Weekday
+    // Which occurrence of that weekday within the interval: `1` for
+    // the first, `-1` for the last, and `0` for every one of them.
+    // The specification's range is `-53 ..= 53` excluding zero, and
+    // zero is this package's spelling of a bare `MO`.
+    ordinal: Int
+
+// The frequency's name as RFC 5545 spells it, in upper case:
+// `"SECONDLY"` through `"YEARLY"`.
+//
+// ```novo
+// use rrulefreq
+//
+// fn main() [io]
+//     println(rrulefreq.freq_name(RruleWeekly))      // WEEKLY
+// ```
+pub fn freq_name(f: RruleFreq) -> Str []
+    todo("rrule-nv.rrulefreq.freq_name")
+
+// The frequency a name denotes, or `None`.
+//
+// The comparison is case-insensitive over ASCII, because RFC 5545's
+// own grammar is, and a calendar server that sends `Weekly` is
+// sending a valid rule.
+//
+// ```novo
+// use rrulefreq
+//
+// fn main() [io]
+//     match rrulefreq.freq_named("YEARLY")
+//         Some(_) => println("known")
+//         None    => println("not a frequency")
+// ```
+pub fn freq_named(name: Str) -> ?RruleFreq []
+    todo("rrule-nv.rrulefreq.freq_named")
+
+// The part's name as RFC 5545 spells it, in upper case: `"BYSECOND"`
+// through `"BYSETPOS"`.
+//
+// ```novo
+// use rrulefreq
+//
+// fn main() [io]
+//     println(rrulefreq.part_name(RrulePartBySetPos))    // BYSETPOS
+// ```
+pub fn part_name(p: RrulePart) -> Str []
+    todo("rrule-nv.rrulefreq.part_name")
+
+// The part a name denotes, or `None`.
+//
+// `None` is what makes `RruleUnknownPart` reachable: a parser that
+// guessed at an unrecognised name would produce a rule that silently
+// ignored it.
+//
+// ```novo
+// use rrulefreq
+//
+// fn main() [io]
+//     match rrulefreq.part_named("BYFORTNIGHT")
+//         Some(_) => println("this cannot happen")
+//         None    => println("not a part RFC 5545 defines")
+// ```
+pub fn part_named(name: Str) -> ?RrulePart []
+    todo("rrule-nv.rrulefreq.part_named")
+
+// A weekday with an ordinal.
+//
+// An ordinal of zero means every occurrence of that weekday in the
+// interval, which is what a bare `MO` means.
+//
+// ```novo
+// use civil
+// use rrulefreq
+//
+// fn main() [io]
+//     println(rrulefreq.weekday_num_text(rrulefreq.weekday_num(Mon, 0)))   // MO
+// ```
+pub fn weekday_num(weekday: civil.Weekday, ordinal: Int) -> RruleWeekdayNum []
+    todo("rrule-nv.rrulefreq.weekday_num")
+
+// The value as RFC 5545 writes it: `"MO"`, `"+1MO"`, `"-1SU"`.
+//
+// A positive ordinal is printed with its sign, which is the form
+// every reference implementation emits and the form a round-trip test
+// compares against.
+//
+// ```novo
+// use civil
+// use rrulefreq
+//
+// fn main() [io]
+//     println(rrulefreq.weekday_num_text(rrulefreq.weekday_num(Sun, 1)))   // +1SU
+// ```
+pub fn weekday_num_text(w: RruleWeekdayNum) -> Str []
+    todo("rrule-nv.rrulefreq.weekday_num_text")
+
+// The value a `BYDAY` item denotes, or `None`.
+//
+// Accepts `"MO"`, `"+1MO"`, `"1MO"` and `"-1SU"`, because the
+// specification's grammar makes the plus sign optional and servers
+// send both.  `None` for an ordinal of zero written out, which the
+// grammar excludes.
+//
+// ```novo
+// use rrulefreq
+//
+// fn main() [io]
+//     match rrulefreq.weekday_num_parse("-1SU")
+//         Some(w) => println("${w.ordinal}")      // -1
+//         None    => println("not a BYDAY value")
+// ```
+pub fn weekday_num_parse(text: Str) -> ?RruleWeekdayNum []
+    todo("rrule-nv.rrulefreq.weekday_num_parse")
+
+// The weekday's two-letter code as RFC 5545 spells it: `"MO"`
+// through `"SU"`.
+//
+// Separate from `weekday_num_text` because `WKST` takes the code with
+// no ordinal at all.
+//
+// ```novo
+// use civil
+// use rrulefreq
+//
+// fn main() [io]
+//     println(rrulefreq.weekday_code(Thu))        // TH
+// ```
+pub fn weekday_code(w: civil.Weekday) -> Str []
+    todo("rrule-nv.rrulefreq.weekday_code")
+
+// The weekday a two-letter code denotes, or `None`.
+//
+// ```novo
+// use rrulefreq
+//
+// fn main() [io]
+//     match rrulefreq.weekday_coded("SU")
+//         Some(_) => println("known")
+//         None    => println("not a weekday code")
+// ```
+pub fn weekday_coded(code: Str) -> ?civil.Weekday []
+    todo("rrule-nv.rrulefreq.weekday_coded")

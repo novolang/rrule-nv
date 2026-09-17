@@ -1,0 +1,135 @@
+// rrulespec_tests.nv — RFC 5545 § 3.3.10's expansion/limitation
+// table, asserted cell by cell.
+//
+// RED ON PURPOSE: every assertion reaches `not implemented:
+// rrule-nv.<module>.<fn>`.
+//
+// This is the suite that matters most.  A wrong cell in that table
+// produces a rule that RUNS and generates the wrong series, with
+// nothing raised and nothing logged, so the table is checked against
+// the specification's own printed copy rather than against an
+// implementation's behaviour.
+
+use std.test
+use civil
+use rruleerror
+use rrulefreq
+use rrulespec
+
+@test
+fn test_bymonth_limits_a_weekly_rule_and_expands_a_yearly_one() [io]
+    // The two cells people get wrong in opposite directions.
+    // `FREQ=WEEKLY;BYMONTH=1` keeps the weekly occurrences that fall
+    // in January; expanding it instead gives one occurrence per
+    // January per week, which is a plausible-looking series nobody
+    // wrote.
+    test.case("weekly limits")
+    let weekly = rrulespec.rule(RruleWeekly)
+    test.assert(rrulespec.role_name(rrulespec.part_role(weekly, RrulePartByMonth))
+                == "limits")
+
+    test.case("yearly expands")
+    let yearly = rrulespec.rule(RruleYearly)
+    test.assert(rrulespec.role_name(rrulespec.part_role(yearly, RrulePartByMonth))
+                == "expands")
+
+@test
+fn test_byday_changes_role_with_the_rest_of_the_rule() [io]
+    // The table's footnote, and the reason `part_role` takes the
+    // whole rule rather than the frequency alone.
+    test.case("monthly BYDAY on its own expands")
+    let monthly = rrulespec.with_by_day(rrulespec.rule(RruleMonthly),
+                                        [rrulefreq.weekday_num(Mon, 0)])
+    test.assert(rrulespec.role_name(rrulespec.part_role(monthly, RrulePartByDay))
+                == "expands")
+
+    test.case("monthly BYDAY beside BYMONTHDAY limits")
+    let both = rrulespec.with_by_monthday(monthly, [13])
+    test.assert(rrulespec.role_name(rrulespec.part_role(both, RrulePartByDay))
+                == "limits")
+
+    test.case("and that is `Friday the 13th`, not `every Friday and every 13th`")
+    test.assert(rrulespec.role_name(rrulespec.part_role(both, RrulePartByMonthDay))
+                == "limits")
+
+@test
+fn test_a_part_that_does_not_apply_is_named_rather_than_ignored() [io]
+    test.case("BYWEEKNO is only meaningful under YEARLY")
+    let monthly = rrulespec.rule(RruleMonthly)
+    test.assert(rrulespec.role_name(rrulespec.part_role(monthly, RrulePartByWeekNo))
+                == "not-applicable")
+
+    test.case("and a rule carrying it is refused")
+    let bad = rrulespec.with_by_weekno(monthly, [20])
+    let problems = rrulespec.check(bad)
+    test.assert(list.len(problems) == 1)
+    test.assert(rruleerror.code(problems[0]) == "by-week-no-needs-yearly")
+
+@test
+fn test_bysetpos_selects_from_a_set_something_else_expanded() [io]
+    test.case("the last weekday of the month is BYDAY with BYSETPOS=-1")
+    let days = [rrulefreq.weekday_num(Mon, 0), rrulefreq.weekday_num(Tue, 0),
+                rrulefreq.weekday_num(Wed, 0), rrulefreq.weekday_num(Thu, 0),
+                rrulefreq.weekday_num(Fri, 0)]
+    let r = rrulespec.with_by_setpos(
+                rrulespec.with_by_day(rrulespec.rule(RruleMonthly), days), [-1])
+    test.assert(list.len(r.by_setpos) == 1)
+    test.assert(list.len(rrulespec.check(r)) == 0)
+
+    test.case("BYSETPOS with nothing to select from is refused")
+    let alone = rrulespec.with_by_setpos(rrulespec.rule(RruleMonthly), [-1])
+    let problems = rrulespec.check(alone)
+    test.assert(list.len(problems) == 1)
+    test.assert(rruleerror.code(problems[0]) == "by-set-pos-without-other-part")
+
+@test
+fn test_check_answers_every_problem_and_not_the_first() [io]
+    // A rule composed by hand usually has more than one fault, and a
+    // caller fixing them one run at a time is a caller who gives up.
+    test.case("a zero interval and an ordinal weekday under DAILY are two problems")
+    let r = rrulespec.with_by_day(
+                rrulespec.with_interval(rrulespec.rule(RruleDaily), 0),
+                [rrulefreq.weekday_num(Mon, 1)])
+    test.assert(list.len(rrulespec.check(r)) == 2)
+
+    test.case("a well-formed rule has none")
+    test.assert(list.len(rrulespec.check(rrulespec.rule(RruleDaily))) == 0)
+
+@test
+fn test_the_defaults_are_the_specifications_own() [io]
+    test.case("interval 1, week start Monday, no end")
+    let r = rrulespec.rule(RruleWeekly)
+    test.assert(r.interval == 1)
+    test.assert(civil.weekday_number(r.wkst) == 1)
+    test.assert(rrulespec.is_finite(r) == false)
+
+    test.case("a COUNT makes it finite and reads back")
+    let counted = rrulespec.with_end(r, RruleCount(10))
+    test.assert(rrulespec.is_finite(counted))
+    match rrulespec.end_count(counted.end)
+        Some(n) => test.assert(n == 10)
+        None    => test.fail("a COUNT rule has a count")
+
+    test.case("and a rule with no COUNT has none")
+    test.assert_none(rrulespec.end_count(RruleNever))
+
+@test
+fn test_the_week_start_is_part_of_the_rule_because_it_changes_the_answer() [io]
+    // `FREQ=WEEKLY;INTERVAL=2;BYDAY=SU,MO` puts the Sunday and the
+    // Monday in one interval under WKST=SU and in different intervals
+    // under WKST=MO — a two-week difference in a fortnightly rota.
+    test.case("the default is Monday and it can be moved")
+    let r = rrulespec.with_wkst(rrulespec.rule(RruleWeekly), Sun)
+    test.assert(civil.weekday_number(r.wkst) == 7)
+
+    test.case("the time parts are set together")
+    let t = rrulespec.with_by_time(rrulespec.rule(RruleDaily), [9, 17], [30], [0])
+    test.assert(list.len(t.by_hour) == 2)
+    test.assert(list.len(t.by_minute) == 1)
+    test.assert(list.len(t.by_second) == 1)
+
+    test.case("the yearly lists take negative values counting from the end")
+    let y = rrulespec.with_by_yearday(rrulespec.rule(RruleYearly), [1, -1])
+    test.assert(y.by_yearday[1] == -1)
+    let m = rrulespec.with_by_month(rrulespec.rule(RruleYearly), [1, 7])
+    test.assert(list.len(m.by_month) == 2)

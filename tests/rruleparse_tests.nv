@@ -1,0 +1,133 @@
+// rruleparse_tests.nv — the RECUR grammar both ways, with the
+// specification's own worked examples.
+//
+// RED ON PURPOSE.  The rules here are copied from RFC 5545 § 3.8.5.3,
+// which prints about forty worked examples with the series each one
+// generates.
+
+use std.test
+use civil
+use rruleerror
+use rrulefreq
+use rruleparse
+use rrulespec
+
+@test
+fn test_the_specifications_own_examples_parse() [io]
+    test.case("every other week on Monday, Wednesday and Friday, until 1997-12-24")
+    match rruleparse.parse("FREQ=WEEKLY;INTERVAL=2;WKST=SU;BYDAY=MO,WE,FR")
+        Err(_) => test.fail("that is RFC 5545 § 3.8.5.3's own example")
+        Ok(r)  =>
+            test.assert(rrulefreq.freq_name(r.freq) == "WEEKLY")
+            test.assert(r.interval == 2)
+            test.assert(civil.weekday_number(r.wkst) == 7)
+            test.assert(list.len(r.by_day) == 3)
+
+    test.case("the last work day of the month")
+    match rruleparse.parse("FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1")
+        Err(_) => test.fail("that is RFC 5545 § 3.8.5.3's own example")
+        Ok(r)  =>
+            test.assert(list.len(r.by_day) == 5)
+            test.assert(r.by_setpos[0] == -1)
+
+    test.case("a content line carries the property name")
+    match rruleparse.parse_line("RRULE:FREQ=DAILY;INTERVAL=2")
+        Err(_) => test.fail("that is an RRULE line")
+        Ok(r)  => test.assert(r.interval == 2)
+
+@test
+fn test_byday_carries_an_ordinal_and_round_trips() [io]
+    test.case("-1SU is the last Sunday")
+    match rrulefreq.weekday_num_parse("-1SU")
+        None    => test.fail("that is a BYDAY value")
+        Some(w) =>
+            test.assert(w.ordinal == -1)
+            test.assert(civil.weekday_number(w.weekday) == 7)
+
+    test.case("a bare MO is every Monday, spelled as ordinal zero")
+    match rrulefreq.weekday_num_parse("MO")
+        None    => test.fail("that is a BYDAY value")
+        Some(w) => test.assert(w.ordinal == 0)
+
+    test.case("printing puts the sign back on a positive ordinal")
+    test.assert(rrulefreq.weekday_num_text(rrulefreq.weekday_num(Sun, 1)) == "+1SU")
+    test.assert(rrulefreq.weekday_num_text(rrulefreq.weekday_num(Mon, 0)) == "MO")
+
+    test.case("the two-letter codes go both ways")
+    test.assert(rrulefreq.weekday_code(Thu) == "TH")
+    match rrulefreq.weekday_coded("SU")
+        None    => test.fail("SU is a weekday code")
+        Some(w) => test.assert(civil.weekday_number(w) == 7)
+
+@test
+fn test_printing_is_canonical_and_omits_the_defaults() [io]
+    test.case("FREQ comes first and INTERVAL=1 is not written")
+    let r = rrulespec.with_end(rrulespec.rule(RruleDaily), RruleCount(3))
+    test.assert(rruleparse.print(r) == "FREQ=DAILY;COUNT=3")
+
+    test.case("a content line is the same text behind RRULE:")
+    test.assert(rruleparse.print_line(rrulespec.rule(RruleYearly)) == "RRULE:FREQ=YEARLY")
+
+    test.case("WKST is written when it is not the default")
+    let sun = rrulespec.with_wkst(rrulespec.rule(RruleWeekly), Sun)
+    test.assert(rruleparse.wkst_text(sun) == "SU")
+    test.assert(rruleparse.wkst_text(rrulespec.rule(RruleWeekly)) == "")
+
+    test.case("the order the server sent is recoverable before the canonical print")
+    let names = rruleparse.part_names("COUNT=3;FREQ=DAILY")
+    test.assert(list.len(names) == 2)
+    test.assert(names[0] == "COUNT")
+
+@test
+fn test_the_parser_refuses_rather_than_repairs() [io]
+    // Each of these is a rule a lenient parser turns into a different
+    // rule that runs.
+    test.case("a rule with no FREQ")
+    match rruleparse.parse("COUNT=3")
+        Ok(_)  => test.fail("FREQ is the one required part")
+        Err(e) => test.assert(rruleerror.code(e) == "missing-freq")
+
+    test.case("an unknown part is refused, not ignored")
+    match rruleparse.parse("FREQ=DAILY;BYFORTNIGHT=2")
+        Ok(_)  => test.fail("an unknown part is usually a misspelt known one")
+        Err(e) =>
+            test.assert(rruleerror.code(e) == "unknown-part")
+            test.assert(rruleerror.is_grammar_fault(e))
+
+    test.case("a repeated part is refused, because last-wins and first-wins disagree")
+    match rruleparse.parse("FREQ=DAILY;COUNT=3;COUNT=4")
+        Ok(_)  => test.fail("RFC 5545 allows each part once")
+        Err(e) => test.assert(rruleerror.code(e) == "duplicate-part")
+
+    test.case("COUNT and UNTIL together are refused")
+    match rruleparse.parse("FREQ=DAILY;COUNT=3;UNTIL=20261231T000000Z")
+        Ok(_)  => test.fail("they are two answers to one question")
+        Err(e) =>
+            test.assert(rruleerror.code(e) == "both-count-and-until")
+            test.assert(rruleerror.is_grammar_fault(e) == false)
+
+    test.case("a value outside its range is refused, and the part is named")
+    match rruleparse.parse("FREQ=YEARLY;BYMONTH=13")
+        Ok(_)  => test.fail("there is no thirteenth month")
+        Err(e) =>
+            test.assert(rruleerror.code(e) == "value-out-of-range")
+            test.assert(str.len(rruleerror.message(e)) > 0)
+
+@test
+fn test_validity_and_description_are_separate_questions() [io]
+    test.case("is_valid answers without building the rule")
+    test.assert(rruleparse.is_valid("FREQ=DAILY"))
+    test.assert(rruleparse.is_valid("EVERY DAY") == false)
+
+    test.case("describe writes the rule as an English sentence")
+    test.assert(rruleparse.describe(rrulespec.rule(RruleDaily)) == "every day")
+
+    test.case("the part and frequency names go both ways")
+    test.assert(rrulefreq.part_name(RrulePartBySetPos) == "BYSETPOS")
+    match rrulefreq.part_named("BYSETPOS")
+        None    => test.fail("BYSETPOS is a part")
+        Some(p) => test.assert(rrulefreq.part_name(p) == "BYSETPOS")
+    test.assert_none(rrulefreq.part_named("BYFORTNIGHT"))
+    match rrulefreq.freq_named("yearly")
+        None    => test.fail("the grammar is case-insensitive over ASCII")
+        Some(f) => test.assert(rrulefreq.freq_name(f) == "YEARLY")
