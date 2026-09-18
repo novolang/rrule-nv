@@ -80,6 +80,18 @@ pub enum RruleError
     // which answers the same question first.
     RruleUnboundedRecurrence
 
+// `RruleError` is an `Error`, which is what lets
+// `Result<T, RruleError>` exist at all — `rruleparse.parse`,
+// `rruleparse.parse_line` and `rruleiter.count_occurrences` all answer
+// with one.
+impl Error for RruleError
+    // The one-line message: `rruleerror.message`'s sentence, the
+    // refusal named with the part or the value it was about.
+    //
+    // Panics with `not implemented` until the bodies land.
+    fn message(self) -> Str
+        todo("rrule-nv.RruleError.message")
+
 // The refusal as a sentence, ending without a full stop, suitable for
 // a log line or an error message the caller composes.
 //
