@@ -1,37 +1,36 @@
 [package]
 name        = "rrule-nv"
-version     = "0.0.1"
+version     = "0.1.0"
 description = "RFC 5545 recurrence rules over civil dates: the RECUR grammar parsed and printed, the BYxxx expansion and limit table published as a total function of the frequency, BYSETPOS applied per interval, RDATE and EXDATE sets, and occurrences generated through a cursor value that a caller must bound."
 license     = "Apache-2.0"
-# An INTERFACE release: every `pub fn` body is a `todo()`, so the
-# signatures and the effect rows are published and nothing is
-# implemented.  `novo pkg publish` recognises the shape and requires
-# both the draft stability and the 0.0.x version; the first
-# implementation is the 0.1.0 published over it.
-stability   = "draft"
-# `core`.  Every row is `[]`.  A recurrence is defined on the local
-# calendar, so every occurrence this package generates is one of
-# calendar-nv's civil values — a wall clock with no zone — and nothing
+# `experimental` because no program outside this repository has used the
+# package yet, and the tests were written against the signatures rather
+# than by a consumer.
+stability   = "experimental"
+# `core`.  Every effect row is `[]`.  A recurrence is defined on the
+# local calendar, so every occurrence this package generates is one of
+# calendar-nv's civil values, a wall clock with no zone, and nothing
 # here reads a clock, opens a file or resolves a time zone.  Turning a
-# civil occurrence into an instant is tz-nv's job and has its own
-# failure mode; keeping it out is what makes a year of occurrences
-# testable with no clock and no zone database.
+# civil occurrence into an instant is tz-nv's, with its own failure
+# mode.  Keeping it out lets a test generate a year of occurrences with
+# no clock and no zone database.
 layer       = "core"
 category    = "time"
 tags        = ["rrule", "recurrence", "rfc-5545", "icalendar", "calendar", "schedule", "time"]
 repository  = "https://github.com/novolang/rrule-nv"
 maintainers = ["novo-lang"]
-novo        = ">= 0.9.0"
+# Lists as reference types, `if let` and negative indexing are in
+# 0.13.0.
+novo        = ">= 0.13.0"
 
 [docs.pages]
 "README.md" = "RFC 5545 recurrence rules over civil dates"
 
 [dependencies]
 # calendar-nv supplies `CivilDate`, `CivilDateTime` and `Weekday`, the
-# types every occurrence is made of, and the month and year arithmetic
-# the BYxxx expansion is written in — `days_in_month` is what
-# `BYMONTHDAY=-1` means and `iso_week` is what `BYWEEKNO` means.
-# Taking the types rather than declaring its own is what lets a caller
-# hand an occurrence straight to a formatter, and to ical-nv.  `core`,
-# so the layer rule holds.
-calendar-nv = "^0.0.2"
+# types every occurrence is made of, and the calendar arithmetic the
+# BYxxx expansion is written in: `days_in_month` is what
+# `BYMONTHDAY=-1` counts back from.  Taking the types rather than
+# declaring its own lets a caller hand an occurrence to a formatter or
+# to ical-nv.  calendar-nv is `core`, the same layer as this package.
+calendar-nv = "^0.2.0"

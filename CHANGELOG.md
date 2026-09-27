@@ -5,6 +5,40 @@ All notable changes to rrule-nv are recorded here. The format is
 package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 with the pre-1.0 rule that a breaking change bumps the MINOR number.
 
+## [0.1.0] — 2026-09-27
+
+RFC 5545 recurrence rules: the grammar in both directions, the
+expansion table, the recurrence set and its generation.
+
+- The generator is python-dateutil's method: a rule is prepared with
+  the parts it leaves out taken from `DTSTART`, and each interval's
+  days are filtered by the day parts, crossed with the time parts, and
+  cut by `BYSETPOS`.  An interval is computed on its own, so a cursor
+  can start at any instant, and the finer frequencies skip the days no
+  part keeps.
+- All forty-one examples of RFC 5545 section 3.8.5.3 generate the
+  occurrences the RFC lists, and three hundred rules drawn at random
+  agree with python-dateutil's first occurrences.
+- The parser accepts the parts in any order, as RFC 5545 requires, and
+  refuses a rule `rrulespec.check` finds a problem in.
+- A search for an occurrence stops at the end of the year 9999, so a
+  rule no day can satisfy answers no occurrences rather than running
+  on.
+- The dependency is `calendar-nv ^0.2.0`, and the toolchain floor is
+  0.13.0.
+
+Breaking changes against 0.0.1:
+
+- `RruleUntil` carries the value type its `UNTIL` was written in, as a
+  new enum `RruleUntilKind`, so `rruleset.check_set` can compare it
+  with `DTSTART`'s.
+- `RruleError` has four more variants: `RrulePartNotApplicable`,
+  `RruleBadValue`, `RruleWrongProperty` and `RruleTimePartWithDate`.
+- `RruleCursor` holds the finite part of the set as civil seconds and
+  a `floor`, rather than one interval's buffer.
+- A `BYMONTHDAY` beside a `BYDAY` under `MONTHLY` expands, as the RFC's
+  table says.  The 0.0.1 tests expected it to limit.
+
 ## [0.0.1] — 2026-09-17
 
 **The interface, published before anyone implements it.** Every public

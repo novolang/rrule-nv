@@ -9,12 +9,6 @@ generates the dates they describe, in novo-lang. The reference
 implementations are the Rust crate [`rrule`](https://docs.rs/rrule) and
 Python's [`dateutil.rrule`](https://dateutil.readthedocs.io/en/stable/rrule.html).
 
-**Status: NOT IMPLEMENTED — interface only.** Every function is
-declared with its full signature, but every body is a `todo()` that
-panics when called. The package is published so its design can be
-reviewed and depended on before it is implemented. Version 0.1.0 will
-be the first working release.
-
 ## What a recurrence rule is
 
 A rule is a list of **parts**, separated by semicolons, each a name and
@@ -25,7 +19,9 @@ required and comes first. It names the **frequency**: `SECONDLY`,
 `INTERVAL` says how many frequency units lie between one **interval**
 and the next. `COUNT` and `UNTIL` say when the rule stops, and RFC 5545
 section 3.3.10 forbids both in one rule. A rule with neither generates
-occurrences forever.
+occurrences forever. RFC 5545 asks for `FREQ` first for older readers
+and requires a reader to accept the parts in any order, and this
+package does both.
 
 Nine further parts begin with `BY`. Each takes a list of values.
 
@@ -66,6 +62,8 @@ change, and the instant it names moves by an hour.
 novo pkg add rrule-nv
 ```
 
+rrule-nv needs a novo-lang toolchain of 0.13.0 or newer.
+
 ## Example
 
 ```novo
@@ -91,16 +89,13 @@ fn main() [io]
                         println("${o.date.year}-${o.date.month}-${o.date.day}")
 ```
 
-Build and test with `novo pkg build` and `novo test`. Today `novo test`
-fails on purpose: every test reaches a
-`not implemented: rrule-nv.<module>.<fn>` panic. The tests are the
-specification the implementation will have to satisfy.
+Build with `novo pkg build` and run the suites with `novo test`.
 
 ## What the package contains
 
 | Module | Contents |
 | --- | --- |
-| `rruleerror` | The eleven refusals, a stable code for each, and which of them only a parser can meet. |
+| `rruleerror` | The fifteen refusals, a stable code for each, and which of them only text can carry. |
 | `rrulefreq` | The frequency, the nine `BY` parts, and the weekday-with-an-ordinal that `BYDAY` is made of. |
 | `rrulespec` | The rule as a value, its builders, and the table saying what each part does in it. |
 | `rruleparse` | The `RECUR` grammar in both directions, and an English description. |
@@ -130,47 +125,67 @@ knows where it is calls this and nothing else.
 
 ## The rules a user needs
 
-1. **`FREQ` is required and comes first.** RFC 5545 section 3.3.10. A
+1. **`FREQ` is required.** RFC 5545 section 3.3.10. A
    rule without it is `RruleMissingFreq`.
 2. **`COUNT` and `UNTIL` must not both appear.** RFC 5545 section
    3.3.10.
 3. **`UNTIL`'s value type must match `DTSTART`'s.** A date-valued start
    takes a date-valued `UNTIL`. RFC 5545 section 3.3.10.
-   `rruleset.check_set` reports the mismatch.
+   `rruleset.check_set` reports the mismatch. A date `UNTIL` includes
+   the whole of its day. An `UNTIL` written in UTC is compared with the
+   wall-clock occurrences as written, so a caller whose `DTSTART` has a
+   time zone converts it to that zone's wall time first.
 4. **Each `BY` part either expands the set or limits it, and which one
    depends on the frequency.** RFC 5545 section 3.3.10 gives the table.
    `rrulespec.part_role` answers for a given rule.
 5. **`BYDAY`'s role also depends on the rest of the rule.** Under
    `MONTHLY` it expands on its own and limits beside a `BYMONTHDAY`. So
    `FREQ=MONTHLY;BYDAY=FR;BYMONTHDAY=13` is Friday the 13th, not every
-   Friday and every 13th.
-6. **`BYSETPOS` is applied last, to one interval's set**, and a rule
+   Friday and every 13th. Under `YEARLY` an ordinal counts within the
+   month when `BYMONTH` is present and within the year otherwise, so
+   `FREQ=YEARLY;BYDAY=20MO` is the twentieth Monday of the year.
+6. **A part the table marks not applicable is refused.** `BYYEARDAY`
+   under `DAILY`, `WEEKLY` or `MONTHLY`, and `BYMONTHDAY` under
+   `WEEKLY`, are `RrulePartNotApplicable`.
+7. **`BYSETPOS` is applied last, to one interval's set**, and a rule
    carrying it with no other `BY` part is refused. RFC 5545 section
    3.3.10.
-7. **`BYWEEKNO` is only valid under `FREQ=YEARLY`.** RFC 5545 section
+8. **`BYWEEKNO` is only valid under `FREQ=YEARLY`.** RFC 5545 section
    3.3.10.
-8. **An ordinal in `BYDAY` is only valid under `MONTHLY` or
+9. **An ordinal in `BYDAY` is only valid under `MONTHLY` or
    `YEARLY`.** Under a weekly rule there is one of each weekday, so the
    ordinal has nothing to count. RFC 5545 section 3.3.10.
-9. **`WKST` changes the answer.** It decides where a week begins, so it
-   decides which occurrences of a weekly rule with an interval above
-   one fall in which interval, and which week an ISO week number names.
-   The default is Monday.
-10. **`DTSTART` is always the first occurrence**, whether or not the
-    rule would have produced it. RFC 5545 section 3.8.5.3.
-    `rruleset.is_synchronized` answers whether the rule would have.
-11. **`EXDATE` is applied after `RDATE`**, so a date in both is
+10. **`WKST` changes the answer.** It decides where a week begins, so it
+    decides which occurrences of a weekly rule with an interval above
+    one fall in which interval, and which week an ISO week number names.
+    The default is Monday.
+11. **`DTSTART` is always the first occurrence**, whether or not the
+    rule would have produced it, and a `COUNT` counts it. RFC 5545
+    section 3.8.5.3. `rruleset.is_synchronized` answers whether the rule
+    would have. python-dateutil does not yield an unsynchronised
+    `DTSTART`, so the two libraries differ for such a set.
+12. **The parts a rule leaves out come from `DTSTART`.** A yearly rule
+    with no day part recurs on `DTSTART`'s month and day, a monthly one
+    on its day of the month, and a weekly one on its weekday. Every
+    frequency coarser than a second takes the time of day it does not
+    name from `DTSTART`. A day that does not exist is skipped: the 30th
+    of a monthly rule has no February occurrence.
+13. **`EXDATE` is applied after `RDATE`**, so a date in both is
     excluded. RFC 5545 section 3.8.5.1.
-12. **The recurrence set is a set.** Duplicates are removed, so two
+14. **The recurrence set is a set.** Duplicates are removed, so two
     rules that both produce a Monday produce it once. RFC 5545 section
     3.8.5.3.
-13. **A rule with no `COUNT` and no `UNTIL` has infinitely many
+15. **A rule with no `COUNT` and no `UNTIL` has infinitely many
     occurrences.** `rruleiter.is_bounded` answers whether a set has
     finitely many, and every call in `rruleiter` that returns a list
     takes a bound as an argument.
-14. **Occurrences come out in increasing order**, so two lists may be
+16. **Occurrences come out in increasing order**, so two lists may be
     compared directly.
-15. **An occurrence is a wall-clock value with no time zone.** See the
+17. **A generator stops at the end of the year 9999.** A rule whose
+    parts no day satisfies, such as `FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=30`,
+    has no occurrences, and a search for one ends there. Times are whole
+    seconds: the nanoseconds of a `DTSTART` are dropped.
+18. **An occurrence is a wall-clock value with no time zone.** See the
     next section.
 
 ## Time zones
@@ -232,56 +247,32 @@ generated in a test with no clock and no time-zone database.
 ## Tests
 
 ```bash
-novo test tests/rrulespec_tests.nv   # the expansion and limitation table, cell by cell
-novo test tests/rruleparse_tests.nv  # the grammar both ways, and what it refuses
-novo test tests/rruleiter_tests.nv   # DTSTART, RDATE and EXDATE, and the bound
+novo test tests/rrulespec_tests.nv          #  7 tests: the table's footnotes, the defaults, the checks
+novo test tests/table_tests.nv              #  6 tests: the whole table, every check, every name and refusal
+novo test tests/rruleparse_tests.nv         #  5 tests: the grammar both ways, and what it refuses
+novo test tests/grammar_tests.nv            #  4 tests: every value read and refused, the print, the sentence
+novo test tests/rruleiter_tests.nv          #  6 tests: DTSTART, RDATE and EXDATE, and the bound
+novo test tests/generator_tests.nv          # 11 tests: the generator at its edges
+novo test tests/rfc5545_examples_tests.nv   #  1 test:  every example RFC 5545 section 3.8.5.3 prints
+novo test tests/dateutil_vectors_tests.nv   #  1 test:  300 rules drawn at random, against python-dateutil
+bash tests/coverage.sh                      # 815 of 815 lines of src/, merged over the suites
 ```
 
 The normative source is RFC 5545 section 3.3.10 for the grammar and the
-expansion table, and section 3.8.5 for the recurrence set. The vectors
-are the worked examples RFC 5545 section 3.8.5.3 prints, recomputed on
-a 2026 calendar so that the weekdays can be checked by hand:
-2026-01-05 is a Monday and 2026-01-07 a Wednesday.
+expansion table, and section 3.8.5 for the recurrence set.
+`tests/rfc5545_examples_tests.nv` holds all forty-one examples section
+3.8.5.3 prints, with every occurrence each one lists, written by
+`tools/rfc_examples.py`. The RFC writes them in New York time with some
+`UNTIL` values in UTC, and each `UNTIL` there is the New York wall time
+it names.
 
-The suite asserts that `BYMONTH` limits a weekly rule and expands a
-yearly one, that `BYDAY` beside a `BYMONTHDAY` limits so that
-`FREQ=MONTHLY;BYDAY=FR;BYMONTHDAY=13` is Friday the 13th, that
-`BYWEEKNO` under anything but `YEARLY` is refused, that `BYSETPOS`
-alone is refused, that an unknown or repeated part is refused rather
-than ignored, that `COUNT` and `UNTIL` together are refused, that a
-`DTSTART` the rule would not have produced is still the first
-occurrence and is reported as unsynchronised, that an `EXDATE` beats an
-`RDATE`, and that asking an endless rule for its occurrence count is
-refused rather than attempted.
-
-The tests compile today and fail at run, each on the
-`not implemented: rrule-nv.<module>.<fn>` panic that is its body. The
-suites that build a date reach calendar-nv's own `todo()` first,
-because calendar-nv 0.0.2 is an interface as well. That is the expected
-state of an interface release. They turn green one at a time as bodies
-land.
-
-## Implementation status
-
-| Item | Implemented |
-| --- | --- |
-| `rruleerror.RruleError` and the other public types | the types are declared |
-| `rruleerror.message`, `.code`, `.is_grammar_fault` | no |
-| `rrulefreq.freq_name`, `.freq_named`, `.part_name`, `.part_named` | no |
-| `rrulefreq.weekday_num`, `.weekday_num_text`, `.weekday_num_parse` | no |
-| `rrulefreq.weekday_code`, `.weekday_coded` | no |
-| `rrulespec.rule`, `.with_interval`, `.with_end`, `.with_wkst` | no |
-| `rrulespec.with_by_day`, `.with_by_month`, `.with_by_monthday`, `.with_by_yearday` | no |
-| `rrulespec.with_by_weekno`, `.with_by_setpos`, `.with_by_time` | no |
-| `rrulespec.part_role`, `.role_name`, `.is_finite`, `.end_count`, `.check` | no |
-| `rruleparse.parse`, `.parse_line`, `.print`, `.print_line` | no |
-| `rruleparse.part_names`, `.is_valid`, `.describe`, `.wkst_text` | no |
-| `rruleset.set`, `.with_rule`, `.with_rdate`, `.with_exdate` | no |
-| `rruleset.dtstart_of`, `.is_date_valued`, `.rule_count` | no |
-| `rruleset.is_synchronized`, `.check_set` | no |
-| `rruleiter.cursor`, `.cursor_from`, `.cursor_position`, `.step` | no |
-| `rruleiter.occurrences`, `.between`, `.after`, `.before` | no |
-| `rruleiter.count_occurrences`, `.is_bounded` | no |
+`tools/dateutil_vectors.py` draws rules at random with a fixed seed,
+expands each with python-dateutil's `rrule`, and writes the first twelve
+occurrences into `tests/dateutil_vectors_tests.nv`. It keeps a rule only
+when both libraries give it one meaning: every part allowed under its
+frequency, and a `DTSTART` the rule produces. The suites need no Python
+when they run. `tests/generator_tests.nv` takes its series from
+python-dateutil too.
 
 ## Licence
 
