@@ -1,43 +1,27 @@
-// rruleiter.nv — generating the occurrences, one interval at a time.
+// rruleiter — generating the occurrences of a recurrence set.
 //
-// NO FUNCTION HERE ANSWERS AN UNBOUNDED LIST
+// No function here answers an unbounded list.  `FREQ=DAILY` with no
+// `COUNT` and no `UNTIL` is a legal rule with infinitely many
+// occurrences, and it is the rule people write first.  The unbounded
+// form is the cursor, which yields one occurrence per `step`.  Every
+// function that answers a list takes its bound as an argument: a count
+// or a window.  `is_bounded` is the question to ask first, and
+// `count_occurrences` refuses a set that has no end.
 //
-// `FREQ=DAILY` with no `COUNT` and no `UNTIL` is a legal rule with
-// infinitely many occurrences, and it is the rule people write first.
-// A library whose `all()` returns a list has one behaviour for it:
-// allocate until the process dies.  Every reference implementation
-// ships that function and every one of them documents the hazard in
-// prose that nobody reads.
+// The generator works an interval at a time, because `BYSETPOS` does:
+// "the last weekday of the month" is a property of the month's whole
+// set.  A cursor can start at the interval holding any instant, so
+// `cursor_from` and `after` do not generate what lies before it.
 //
-// So the unbounded form here is the CURSOR, which produces one
-// occurrence per `step` and holds a constant amount of memory, and
-// every function that answers a list takes a bound in its arguments
-// — a count, or a window.  `occurrences` without a bound is not a
-// function that exists.  `is_bounded` is the predicate a caller asks
-// first, and `RruleUnboundedRecurrence` is what a caller gets who
-// asked for every occurrence of a rule that has no end.
-//
-// THE GENERATOR WORKS AN INTERVAL AT A TIME, BECAUSE `BYSETPOS` DOES
-//
-// `FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1` is the last weekday
-// of the month.  "Last" is not a property of an occurrence, it is a
-// property of a month's whole set, so the generator expands one
-// interval, applies the limiting parts to it, sorts it, applies
-// `BYSETPOS`, and only then yields.  That is why `RruleCursor`
-// carries a buffer of the current interval's remaining occurrences
-// alongside its position, and why `cursor_position` reports the
-// interval rather than the occurrence count.
-//
-// THE ORDER IS TOTAL AND ASCENDING
-//
-// Occurrences come out in increasing civil order, with duplicates
-// removed: two `RRULE`s that both produce a Monday produce it once,
-// and an `RDATE` equal to a generated occurrence does not double it.
-// RFC 5545 § 3.8.5.3 requires that the recurrence set be a set.  A
-// caller may therefore compare two whole lists in a test.
+// Occurrences come out ascending with duplicates removed.  Two rules
+// that both produce a Monday produce it once, and an `RDATE` equal to a
+// generated occurrence does not double it (RFC 5545 section 3.8.5.3).
 
+use std.list
 use civil
 use rruleerror
+use rrulegen
+use rrulespec
 use rruleset
 
 // A generation in progress over a recurrence set.
@@ -60,15 +44,17 @@ use rruleset
 pub struct RruleCursor
     // The set being generated from.
     source: rruleset.RruleSet
-    // Which interval the generator has reached, counting from zero at
-    // the `DTSTART`'s own interval.
+    // Which interval of the set's first rule the last occurrence
+    // yielded fell in, counting from zero at the `DTSTART`'s own.
     interval: Int
-    // The occurrences of the current interval that have not been
-    // yielded yet, in order.  This is the buffer `BYSETPOS` needs.
-    pending: [civil.CivilDateTime]
-    // How many occurrences have been yielded, which is what a `COUNT`
-    // is compared against.
+    // The finite part of the set not yet yielded, ascending, as civil
+    // seconds since 1970-01-01T00:00:00: the `DTSTART`, the `RDATE`s,
+    // and every occurrence of each rule that ends with a `COUNT`.
+    pending: [Int]
+    // How many occurrences this cursor has yielded.
     yielded: Int
+    // The next occurrence yielded is at or after this civil second.
+    floor: Int
 
 // What one `step` produced.
 //
@@ -113,7 +99,7 @@ pub struct RruleStep
 //             println("${rruleiter.cursor_position(rruleiter.cursor(s))}")
 // ```
 pub fn cursor(s: rruleset.RruleSet) -> RruleCursor []
-    todo("rrule-nv.rruleiter.cursor")
+    start_at(s, -9223372036854775807 - 1)
 
 // A cursor positioned so that the next `step` yields the first
 // occurrence at or after an instant.
@@ -137,7 +123,7 @@ pub fn cursor(s: rruleset.RruleSet) -> RruleCursor []
 //             println("${rruleiter.cursor_position(rruleiter.cursor_from(s, at))}")
 // ```
 pub fn cursor_from(s: rruleset.RruleSet, at: civil.CivilDateTime) -> RruleCursor []
-    todo("rrule-nv.rruleiter.cursor_from")
+    start_at(s, rrulegen.seconds_of(at))
 
 // Which interval the cursor has reached, counting from zero.
 //
@@ -158,7 +144,7 @@ pub fn cursor_from(s: rruleset.RruleSet, at: civil.CivilDateTime) -> RruleCursor
 //             println("${rruleiter.cursor_position(rruleiter.cursor(s))}")    // 0
 // ```
 pub fn cursor_position(c: RruleCursor) -> Int []
-    todo("rrule-nv.rruleiter.cursor_position")
+    c.interval
 
 // One occurrence, and the cursor that follows it.
 //
@@ -186,7 +172,35 @@ pub fn cursor_position(c: RruleCursor) -> Int []
 //             println("${n}")
 // ```
 pub fn step(c: RruleCursor) -> RruleStep []
-    todo("rrule-nv.rruleiter.step")
+    let s = c.source
+    let excluded = seconds_list(s.exdates)
+    var floor = c.floor
+    var searching = true
+    var found = 0
+    var any = false
+    while searching
+        match earliest(c, floor)
+            Some(o) =>
+                found = o
+                any = true
+                searching = list.contains(excluded, o)
+                floor = o + 1
+            None    =>
+                any = false
+                searching = false
+    if not any
+        return RruleStep { next: c, found: None }
+    var rest: [Int] = []
+    for o in c.pending
+        if o > found
+            list.push(rest, o)
+    let next = RruleCursor {
+        source: s,
+        interval: position_of(s, found),
+        pending: rest,
+        yielded: c.yielded + 1,
+        floor: found + 1 }
+    RruleStep { next: next, found: Some(rrulegen.civil_of(found)) }
 
 // The first `limit` occurrences, or every occurrence when the rule
 // ends before that.
@@ -210,7 +224,16 @@ pub fn step(c: RruleCursor) -> RruleStep []
 //             println("${list.len(rruleiter.occurrences(daily, 5))}")     // 5
 // ```
 pub fn occurrences(s: rruleset.RruleSet, limit: Int) -> [civil.CivilDateTime] []
-    todo("rrule-nv.rruleiter.occurrences")
+    var out: [civil.CivilDateTime] = []
+    var c = cursor(s)
+    while list.len(out) < limit
+        let st = step(c)
+        match st.found
+            Some(o) => list.push(out, o)
+            None    =>
+                return out
+        c = st.next
+    out
 
 // Every occurrence in a window, inclusive of both ends.
 //
@@ -233,7 +256,19 @@ pub fn occurrences(s: rruleset.RruleSet, limit: Int) -> [civil.CivilDateTime] []
 // ```
 pub fn between(s: rruleset.RruleSet, from: civil.CivilDateTime,
                to: civil.CivilDateTime) -> [civil.CivilDateTime] []
-    todo("rrule-nv.rruleiter.between")
+    let last = rrulegen.seconds_of(to)
+    var out: [civil.CivilDateTime] = []
+    var c = cursor_from(s, from)
+    var more = true
+    while more
+        let st = step(c)
+        more = false
+        if let Some(o) = st.found
+            if rrulegen.seconds_of(o) <= last
+                list.push(out, o)
+                more = true
+        c = st.next
+    out
 
 // The first occurrence strictly after an instant, or `None` when the
 // rule ends before one.
@@ -257,7 +292,7 @@ pub fn between(s: rruleset.RruleSet, from: civil.CivilDateTime,
 //                 None    => println("no further occurrence")
 // ```
 pub fn after(s: rruleset.RruleSet, at: civil.CivilDateTime) -> ?civil.CivilDateTime []
-    todo("rrule-nv.rruleiter.after")
+    step(start_at(s, rrulegen.seconds_of(at) + 1)).found
 
 // The last occurrence strictly before an instant, or `None`.
 //
@@ -281,7 +316,19 @@ pub fn after(s: rruleset.RruleSet, at: civil.CivilDateTime) -> ?civil.CivilDateT
 //                 None    => println("this is the first")
 // ```
 pub fn before(s: rruleset.RruleSet, at: civil.CivilDateTime) -> ?civil.CivilDateTime []
-    todo("rrule-nv.rruleiter.before")
+    let limit = rrulegen.seconds_of(at)
+    var last: ?civil.CivilDateTime = None
+    var c = cursor(s)
+    var more = true
+    while more
+        let st = step(c)
+        more = false
+        if let Some(o) = st.found
+            if rrulegen.seconds_of(o) < limit
+                last = Some(o)
+                more = true
+        c = st.next
+    last
 
 // How many occurrences the set has in total.
 //
@@ -305,7 +352,18 @@ pub fn before(s: rruleset.RruleSet, at: civil.CivilDateTime) -> ?civil.CivilDate
 //                 Err(_) => println("this rule has no end")
 // ```
 pub fn count_occurrences(s: rruleset.RruleSet) -> Result<Int, rruleerror.RruleError> []
-    todo("rrule-nv.rruleiter.count_occurrences")
+    if not is_bounded(s)
+        return Err(RruleUnboundedRecurrence)
+    var n = 0
+    var c = cursor(s)
+    var more = true
+    while more
+        let st = step(c)
+        more = st.found != None
+        if more
+            n = n + 1
+        c = st.next
+    Ok(n)
 
 // Whether the set has finitely many occurrences.
 //
@@ -326,4 +384,64 @@ pub fn count_occurrences(s: rruleset.RruleSet) -> Result<Int, rruleerror.RruleEr
 //             println("${rruleiter.is_bounded(s)}")       // true
 // ```
 pub fn is_bounded(s: rruleset.RruleSet) -> Bool []
-    todo("rrule-nv.rruleiter.is_bounded")
+    for r in s.rules
+        if not rrulespec.is_finite(r)
+            return false
+    true
+
+// Civil seconds for each date-time.
+fn seconds_list(xs: [civil.CivilDateTime]) -> [Int]
+    var out: [Int] = []
+    for x in xs
+        list.push(out, rrulegen.seconds_of(x))
+    out
+
+// A cursor over `s` whose first occurrence is at or after civil second
+// `floor`.
+fn start_at(s: rruleset.RruleSet, floor: Int) -> RruleCursor
+    var finite = seconds_list(s.rdates)
+    list.push(finite, rrulegen.seconds_of(s.dtstart))
+    for r in s.rules
+        if rrulespec.end_count(r.end) != None
+            for o in rrulegen.counted(rrulegen.plan(r, s.dtstart))
+                list.push(finite, o)
+    var pending: [Int] = []
+    for o in rrulegen.sorted_set(finite)
+        if o >= floor
+            list.push(pending, o)
+    RruleCursor { source: s,
+        interval: position_of(s, floor),
+        pending: pending,
+        yielded: 0,
+        floor: floor }
+
+// The earliest occurrence at or after `floor`, before exclusion, or
+// `None`.
+fn earliest(c: RruleCursor, floor: Int) -> ?Int
+    var best: ?Int = None
+    for o in c.pending
+        if o >= floor
+            best = earlier(best, o)
+    for r in c.source.rules
+        if rrulespec.end_count(r.end) == None
+            if let Some(o) = rrulegen.first_from(rrulegen.plan(r, c.source.dtstart), floor)
+                best = earlier(best, o)
+    best
+
+// The earlier of `best` and `o`, where `best` is `None` before any
+// candidate has been seen.
+fn earlier(best: ?Int, o: Int) -> ?Int
+    match best
+        Some(b) =>
+            if b < o
+                Some(b)
+            else
+                Some(o)
+        None    => Some(o)
+
+// The interval of the set's first rule that civil second `o` falls in,
+// or 0 for a set with no rules.
+fn position_of(s: rruleset.RruleSet, o: Int) -> Int
+    if list.len(s.rules) == 0
+        return 0
+    rrulegen.interval_of(rrulegen.plan(s.rules[0], s.dtstart), o)

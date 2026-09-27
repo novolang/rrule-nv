@@ -1,9 +1,6 @@
-// rruleparse_tests.nv — the RECUR grammar both ways, with the
-// specification's own worked examples.
+// tests/rruleparse_tests.nv — the RECUR grammar both ways.
 //
-// RED ON PURPOSE.  The rules here are copied from RFC 5545 § 3.8.5.3,
-// which prints about forty worked examples with the series each one
-// generates.
+// The rules are taken from RFC 5545 section 3.8.5.3's worked examples.
 
 use std.test
 use civil

@@ -1,9 +1,9 @@
-// rruleiter_tests.nv — generation: the DTSTART rule, the set
-// operations, BYSETPOS, and the bound every list-returning call takes.
+// tests/rruleiter_tests.nv — generation: the DTSTART rule, the set
+// operations, and the bound every list-returning call takes.
 //
-// RED ON PURPOSE.  The series are RFC 5545 § 3.8.5.3's worked
-// examples, recomputed on a 2026 calendar so the weekdays are checkable
-// by hand: 2026-01-05 is a Monday and 2026-01-07 a Wednesday.
+// The series are small ones on a 2026 calendar, so the weekdays can be
+// checked by hand: 2026-01-05 is a Monday and 2026-01-07 a Wednesday.
+// tests/rfc5545_examples_tests.nv has the RFC's own examples.
 
 use std.test
 use civil
@@ -162,7 +162,7 @@ fn test_a_set_is_checked_against_its_dtstart() [io]
     test.assert(list.len(rruleset.check_set(bad)) == 1)
 
     test.case("an UNTIL whose value type is not the DTSTART's is refused")
-    let until = rrulespec.with_end(rrulespec.rule(RruleDaily), RruleUntil(jan(31)))
+    let until = rrulespec.with_end(rrulespec.rule(RruleDaily), RruleUntil(jan(31), RruleUntilDate))
     let mismatched = rruleset.with_rule(rruleset.set(jan(5), false), until)
     let problems = rruleset.check_set(mismatched)
     test.assert(list.len(problems) == 1)

@@ -1,36 +1,30 @@
-// rruleparse.nv — the RECUR grammar, both directions.
+// rruleparse — the RECUR grammar in both directions, and a sentence.
 //
-// TWO ENTRY POINTS, BECAUSE THERE ARE TWO THINGS PEOPLE CALL A RRULE
+// `FREQ=WEEKLY;BYDAY=MO` is a RECUR value, and `RRULE:FREQ=WEEKLY;BYDAY=MO`
+// is an iCalendar content line whose property is `RRULE`.  Both are
+// handed to recurrence libraries, so `parse` takes the value and
+// `parse_line` the line, and each has a printer that writes what it
+// reads.
 //
-// `FREQ=WEEKLY;BYDAY=MO` is a RECUR value.  `RRULE:FREQ=WEEKLY;BYDAY=MO`
-// is an iCalendar content line whose property name is `RRULE`.  Both
-// are handed to recurrence libraries daily, and a parser that accepts
-// only one of them fails on half its input, while a parser that
-// accepts either without saying which it got cannot round-trip.  So
-// `parse` takes the value and `parse_line` takes the content line,
-// and each has a printer that emits exactly what it accepts.
+// Printing is canonical.  RFC 5545 section 3.3.10 lets the parts come
+// in any order, and `print` writes them in the order of the
+// specification's grammar, `FREQ` first, in upper case, with the
+// defaults `INTERVAL=1` and `WKST=MO` left out.  Two rules that mean the
+// same print the same text, so a stored rule can be compared as a
+// string.  A rule read from a server and printed back is therefore not
+// always the text that arrived, and a caller that must reproduce the
+// original keeps it; `part_names` answers the order it came in.
 //
-// PRINTING IS CANONICAL, AND THAT IS A DECISION WITH A COST
-//
-// RFC 5545 puts no order on the parts and no case rule on the values
-// beyond requiring `FREQ` first.  `print` emits the parts in the
-// specification's own order, in upper case, with the defaults
-// omitted — so two rules that mean the same thing print the same
-// text, and a stored rule can be compared as a string.
-//
-// The cost is that a rule read from a server and printed back is not
-// byte-identical to what arrived.  That is the right trade for a
-// library whose output is stored and compared, and it is stated here
-// rather than discovered: a caller that must reproduce the original
-// text keeps the original text.
-//
-// WHAT THE PARSER REFUSES RATHER THAN REPAIRS
-//
-// An unknown part, a repeated part and a value outside its range are
-// all refused.  Each of them is a rule that a lenient parser turns
-// into a DIFFERENT rule that runs — and a recurrence that runs and is
-// wrong is found weeks later by somebody who missed an appointment.
+// The parser refuses rather than repairs.  An unknown part, a repeated
+// part, a value that is not what its part takes and a value out of
+// range are each refused, and so is a rule `rrulespec.check` finds a
+// problem in.  A lenient parser turns each of those into a different
+// rule that runs.
 
+use std.str
+use std.list
+use civil
+use rrulefreq
 use rruleerror
 use rrulespec
 
@@ -50,7 +44,40 @@ use rrulespec
 //         Ok(r)  => println(rrulefreq.freq_name(r.freq))     // WEEKLY
 // ```
 pub fn parse(value: Str) -> Result<rrulespec.Rrule, rruleerror.RruleError> []
-    todo("rrule-nv.rruleparse.parse")
+    if str.trim(value) == ""
+        return Err(RruleMissingFreq)
+    var seen: [Str] = []
+    var r = rrulespec.rule(RruleDaily)
+    var has_freq = false
+    var has_count = false
+    var has_until = false
+    for item in str.split(value, ";")
+        let eq = str.index(item, "=") ?? -1
+        let name = if eq < 0
+            str.upper(item)
+        else
+            str.upper(str.slice(item, 0, eq))
+        let text = if eq < 0
+            ""
+        else
+            str.slice(item, eq + 1, str.len(item))
+        if not is_part_name(name)
+            return Err(RruleUnknownPart(name))
+        if list.contains(seen, name)
+            return Err(RruleDuplicatePart(name))
+        list.push(seen, name)
+        r = apply_part(r, name, text)!
+        has_freq = has_freq or name == "FREQ"
+        has_count = has_count or name == "COUNT"
+        has_until = has_until or name == "UNTIL"
+    if not has_freq
+        return Err(RruleMissingFreq)
+    if has_count and has_until
+        return Err(RruleBothCountAndUntil)
+    let problems = rrulespec.check(r)
+    if list.len(problems) > 0
+        return Err(problems[0])
+    Ok(r)
 
 // Parse an iCalendar content line whose property is `RRULE`.
 //
@@ -68,7 +95,14 @@ pub fn parse(value: Str) -> Result<rrulespec.Rrule, rruleerror.RruleError> []
 //         Ok(r)  => println("${r.interval}")                 // 2
 // ```
 pub fn parse_line(line: Str) -> Result<rrulespec.Rrule, rruleerror.RruleError> []
-    todo("rrule-nv.rruleparse.parse_line")
+    let colon = str.index(line, ":") ?? -1
+    if colon < 0
+        return Err(RruleWrongProperty(line))
+    let head = str.slice(line, 0, colon)
+    let name = str.slice(head, 0, str.index(head, ";") ?? colon)
+    if str.upper(name) != "RRULE"
+        return Err(RruleWrongProperty(name))
+    parse(str.slice(line, colon + 1, str.len(line)))
 
 // The rule as a RECUR value, canonically.
 //
@@ -85,7 +119,29 @@ pub fn parse_line(line: Str) -> Result<rrulespec.Rrule, rruleerror.RruleError> [
 //     println(rruleparse.print(r))          // FREQ=DAILY;COUNT=3
 // ```
 pub fn print(r: rrulespec.Rrule) -> Str []
-    todo("rrule-nv.rruleparse.print")
+    var parts: [Str] = ["FREQ=${rrulefreq.freq_name(r.freq)}"]
+    if let RruleUntil(at, kind) = r.end
+        list.push(parts, "UNTIL=${until_text(at, kind)}")
+    if let RruleCount(n) = r.end
+        list.push(parts, "COUNT=${n}")
+    if r.interval != 1
+        list.push(parts, "INTERVAL=${r.interval}")
+    add_ints(parts, "BYSECOND", r.by_second)
+    add_ints(parts, "BYMINUTE", r.by_minute)
+    add_ints(parts, "BYHOUR", r.by_hour)
+    if list.len(r.by_day) > 0
+        var days: [Str] = []
+        for w in r.by_day
+            list.push(days, rrulefreq.weekday_num_text(w))
+        list.push(parts, "BYDAY=${str.join(days, ",")}")
+    add_ints(parts, "BYMONTHDAY", r.by_monthday)
+    add_ints(parts, "BYYEARDAY", r.by_yearday)
+    add_ints(parts, "BYWEEKNO", r.by_weekno)
+    add_ints(parts, "BYMONTH", r.by_month)
+    add_ints(parts, "BYSETPOS", r.by_setpos)
+    if wkst_text(r) != ""
+        list.push(parts, "WKST=${wkst_text(r)}")
+    str.join(parts, ";")
 
 // The rule as an iCalendar content line: `print`'s output behind
 // `RRULE:`.
@@ -101,7 +157,7 @@ pub fn print(r: rrulespec.Rrule) -> Str []
 //     println(rruleparse.print_line(rrulespec.rule(RruleYearly)))   // RRULE:FREQ=YEARLY
 // ```
 pub fn print_line(r: rrulespec.Rrule) -> Str []
-    todo("rrule-nv.rruleparse.print_line")
+    "RRULE:${rruleparse.print(r)}"
 
 // The part names the value carries, in the order they were written.
 //
@@ -117,7 +173,11 @@ pub fn print_line(r: rrulespec.Rrule) -> Str []
 //     println("${list.len(rruleparse.part_names("FREQ=DAILY;COUNT=3"))}")    // 2
 // ```
 pub fn part_names(value: Str) -> [Str] []
-    todo("rrule-nv.rruleparse.part_names")
+    var out: [Str] = []
+    for item in str.split(value, ";")
+        let eq = str.index(item, "=") ?? str.len(item)
+        list.push(out, str.slice(item, 0, eq))
+    out
 
 // Whether a value parses, without building the rule.
 //
@@ -132,7 +192,9 @@ pub fn part_names(value: Str) -> [Str] []
 //     println("${rruleparse.is_valid("EVERY DAY")}")         // false
 // ```
 pub fn is_valid(value: Str) -> Bool []
-    todo("rrule-nv.rruleparse.is_valid")
+    match parse(value)
+        Ok(_)  => true
+        Err(_) => false
 
 // The rule as a sentence a person can read: `"every 2 weeks on
 // Monday and Wednesday, 10 times"`.
@@ -150,7 +212,35 @@ pub fn is_valid(value: Str) -> Bool []
 //     println(rruleparse.describe(rrulespec.rule(RruleDaily)))       // every day
 // ```
 pub fn describe(r: rrulespec.Rrule) -> Str []
-    todo("rrule-nv.rruleparse.describe")
+    var words = every_text(r.freq, r.interval)
+    if list.len(r.by_day) > 0
+        var days: [Str] = []
+        for w in r.by_day
+            list.push(days, weekday_words(w))
+        words = "${words} on ${and_list(days)}"
+    if list.len(r.by_monthday) > 0
+        words = "${words} on day ${and_list(ints_text(r.by_monthday))} of the month"
+    if list.len(r.by_yearday) > 0
+        words = "${words} on day ${and_list(ints_text(r.by_yearday))} of the year"
+    if list.len(r.by_weekno) > 0
+        words = "${words} in week ${and_list(ints_text(r.by_weekno))}"
+    if list.len(r.by_month) > 0
+        var months: [Str] = []
+        for m in r.by_month
+            list.push(months, month_name(m))
+        words = "${words} in ${and_list(months)}"
+    if list.len(r.by_hour) > 0
+        words = "${words} at hour ${and_list(ints_text(r.by_hour))}"
+    if list.len(r.by_minute) > 0
+        words = "${words} at minute ${and_list(ints_text(r.by_minute))}"
+    if list.len(r.by_second) > 0
+        words = "${words} at second ${and_list(ints_text(r.by_second))}"
+    if list.len(r.by_setpos) > 0
+        words = "${words}, taking occurrence ${and_list(ints_text(r.by_setpos))} of each"
+    match r.end
+        RruleCount(n)     => "${words}, ${n} times"
+        RruleUntil(at, _) => "${words}, until ${until_words(at)}"
+        RruleNever        => words
 
 // The `WKST` value as RFC 5545 writes it, or `""` when the rule
 // leaves the default.
@@ -169,4 +259,209 @@ pub fn describe(r: rrulespec.Rrule) -> Str []
 //     println(rruleparse.wkst_text(r))       // SU
 // ```
 pub fn wkst_text(r: rrulespec.Rrule) -> Str []
-    todo("rrule-nv.rruleparse.wkst_text")
+    if r.wkst == Mon
+        ""
+    else
+        rrulefreq.weekday_code(r.wkst)
+
+// Whether a name is one of the parts RFC 5545 section 3.3.10 defines.
+fn is_part_name(name: Str) -> Bool
+    let fixed = ["FREQ", "UNTIL", "COUNT", "INTERVAL", "WKST"]
+    list.contains(fixed, name) or rrulefreq.part_named(name) != None
+
+// A comma-separated list of integers, or `RruleBadValue`.  An empty
+// value splits into one empty item, which is not an integer.
+fn int_list(part: Str, text: Str) -> Result<[Int], rruleerror.RruleError>
+    var out: [Int] = []
+    for item in str.split(text, ",")
+        match str.to_int(item)
+            Some(n) => list.push(out, n)
+            None    =>
+                return Err(RruleBadValue(part, text))
+    Ok(out)
+
+// One integer, or `RruleBadValue`.
+fn one_int(part: Str, text: Str) -> Result<Int, rruleerror.RruleError>
+    match str.to_int(text)
+        Some(n) => Ok(n)
+        None    => Err(RruleBadValue(part, text))
+
+// `r` with the part `name` set from its text.
+fn apply_part(r: rrulespec.Rrule, name: Str,
+              text: Str) -> Result<rrulespec.Rrule, rruleerror.RruleError>
+    match name
+        "FREQ"       => apply_freq(r, text)
+        "INTERVAL"   => Ok(rrulespec.with_interval(r, one_int(name, text)!))
+        "COUNT"      => Ok(rrulespec.with_end(r, RruleCount(one_int(name, text)!)))
+        "UNTIL"      => apply_until(r, text)
+        "WKST"       => apply_wkst(r, text)
+        "BYDAY"      => apply_by_day(r, text)
+        "BYSECOND"   => Ok(rrulespec.with_by_time(r, r.by_hour, r.by_minute, int_list(name, text)!))
+        "BYMINUTE"   => Ok(rrulespec.with_by_time(r, r.by_hour, int_list(name, text)!, r.by_second))
+        "BYHOUR"     => Ok(rrulespec.with_by_time(r, int_list(name, text)!, r.by_minute, r.by_second))
+        "BYMONTHDAY" => Ok(rrulespec.with_by_monthday(r, int_list(name, text)!))
+        "BYYEARDAY"  => Ok(rrulespec.with_by_yearday(r, int_list(name, text)!))
+        "BYWEEKNO"   => Ok(rrulespec.with_by_weekno(r, int_list(name, text)!))
+        "BYMONTH"    => Ok(rrulespec.with_by_month(r, int_list(name, text)!))
+        _            => Ok(rrulespec.with_by_setpos(r, int_list(name, text)!))
+
+// `r` with its frequency set from `text`.
+fn apply_freq(r: rrulespec.Rrule, text: Str) -> Result<rrulespec.Rrule, rruleerror.RruleError>
+    match rrulefreq.freq_named(text)
+        Some(f) => Ok(rebuild_freq(r, f))
+        None    => Err(RruleBadValue("FREQ", text))
+
+// `r` with a different frequency and every other part kept.
+fn rebuild_freq(r: rrulespec.Rrule, f: rrulefreq.RruleFreq) -> rrulespec.Rrule
+    let base = rrulespec.with_by_time(rrulespec.rule(f), r.by_hour, r.by_minute, r.by_second)
+    let days = rrulespec.with_by_monthday(rrulespec.with_by_day(base, r.by_day), r.by_monthday)
+    let dates = rrulespec.with_by_weekno(rrulespec.with_by_yearday(days, r.by_yearday), r.by_weekno)
+    let months = rrulespec.with_by_setpos(rrulespec.with_by_month(dates, r.by_month), r.by_setpos)
+    rrulespec.with_wkst(rrulespec.with_end(rrulespec.with_interval(months, r.interval), r.end), r.wkst)
+
+// `r` with its week start set from `text`.
+fn apply_wkst(r: rrulespec.Rrule, text: Str) -> Result<rrulespec.Rrule, rruleerror.RruleError>
+    match rrulefreq.weekday_coded(text)
+        Some(w) => Ok(rrulespec.with_wkst(r, w))
+        None    => Err(RruleBadValue("WKST", text))
+
+// `r` with its `BYDAY` list set from `text`.
+fn apply_by_day(r: rrulespec.Rrule, text: Str) -> Result<rrulespec.Rrule, rruleerror.RruleError>
+    var days: [rrulefreq.RruleWeekdayNum] = []
+    for item in str.split(text, ",")
+        match rrulefreq.weekday_num_parse(item)
+            Some(w) => list.push(days, w)
+            None    =>
+                return Err(RruleBadValue("BYDAY", text))
+    Ok(rrulespec.with_by_day(r, days))
+
+// `r` ending at the `UNTIL` in `text`: `YYYYMMDD`, `YYYYMMDDTHHMMSS`,
+// or that with a trailing `Z`.
+fn apply_until(r: rrulespec.Rrule, text: Str) -> Result<rrulespec.Rrule, rruleerror.RruleError>
+    let n = str.len(text)
+    if n != 8 and n != 15 and n != 16 or n == 15 and str.byte_at_or(text, 8, 0) != 'T'
+        return Err(RruleBadValue("UNTIL", text))
+    if n == 16 and (str.byte_at_or(text, 8, 0) != 'T' or str.byte_at_or(text, 15, 0) != 'Z')
+        return Err(RruleBadValue("UNTIL", text))
+    let y = str.to_int(str.slice(text, 0, 4)) ?? -1
+    let mo = str.to_int(str.slice(text, 4, 6)) ?? -1
+    let d = str.to_int(str.slice(text, 6, 8)) ?? -1
+    let day = match civil.date(y, mo, d)
+        Ok(found) => found
+        Err(_)    =>
+            return Err(RruleBadValue("UNTIL", text))
+    if n == 8
+        return Ok(rrulespec.with_end(r, RruleUntil(civil.datetime(day, civil.midnight()), RruleUntilDate)))
+    let h = str.to_int(str.slice(text, 9, 11)) ?? -1
+    let mi = str.to_int(str.slice(text, 11, 13)) ?? -1
+    let se = str.to_int(str.slice(text, 13, 15)) ?? -1
+    let clock = match civil.time_of(h, mi, se, 0)
+        Ok(found) => found
+        Err(_)    =>
+            return Err(RruleBadValue("UNTIL", text))
+    let kind = if n == 16
+        RruleUntilUtc
+    else
+        RruleUntilLocal
+    Ok(rrulespec.with_end(r, RruleUntil(civil.datetime(day, clock), kind)))
+
+// The `UNTIL` value as the grammar writes it.
+fn until_text(at: civil.CivilDateTime, kind: rrulespec.RruleUntilKind) -> Str
+    let d = at.date
+    let t = at.time
+    let day = "${pad(d.year, 4)}${pad(d.month, 2)}${pad(d.day, 2)}"
+    let clock = "T${pad(t.hour, 2)}${pad(t.minute, 2)}${pad(t.second, 2)}"
+    match kind
+        RruleUntilDate  => day
+        RruleUntilLocal => "${day}${clock}"
+        RruleUntilUtc   => "${day}${clock}Z"
+
+// `n` in at least `width` digits.
+fn pad(n: Int, width: Int) -> Str
+    str.pad_left("${n}", width, "0")
+
+// Add `NAME=a,b,c` to `parts` when `values` is not empty.
+fn add_ints(var parts: [Str], name: Str, values: [Int])
+    if list.len(values) > 0
+        list.push(parts, "${name}=${str.join(ints_text(values), ",")}")
+
+// Each integer as text.
+fn ints_text(values: [Int]) -> [Str]
+    var out: [Str] = []
+    for v in values
+        list.push(out, "${v}")
+    out
+
+// `a`, `a and b`, or `a, b and c`.
+fn and_list(items: [Str]) -> Str
+    let n = list.len(items)
+    if n == 1
+        return items[0]
+    "${str.join(items[0:n - 1], ", ")} and ${items[-1]}"
+
+// `every day`, `every 2 weeks`.
+fn every_text(f: rrulefreq.RruleFreq, interval: Int) -> Str
+    let unit = match f
+        RruleSecondly => "second"
+        RruleMinutely => "minute"
+        RruleHourly   => "hour"
+        RruleDaily    => "day"
+        RruleWeekly   => "week"
+        RruleMonthly  => "month"
+        RruleYearly   => "year"
+    if interval == 1
+        "every ${unit}"
+    else
+        "every ${interval} ${unit}s"
+
+// A `BYDAY` value in words: `Monday`, `the 1st Friday`, `the last
+// Sunday`, `the 20th Monday`, `the 2nd-to-last Monday`.
+fn weekday_words(w: rrulefreq.RruleWeekdayNum) -> Str
+    let day = day_name(w.weekday)
+    if w.ordinal == 0
+        day
+    else if w.ordinal == -1
+        "the last ${day}"
+    else if w.ordinal < 0
+        "the ${ordinal_text(-w.ordinal)}-to-last ${day}"
+    else
+        "the ${ordinal_text(w.ordinal)} ${day}"
+
+// `1st`, `2nd`, `3rd`, `4th`, `11th`, `21st`.
+fn ordinal_text(n: Int) -> Str
+    let tail = if n % 100 >= 11 and n % 100 <= 13
+        "th"
+    else if n % 10 == 1
+        "st"
+    else if n % 10 == 2
+        "nd"
+    else if n % 10 == 3
+        "rd"
+    else
+        "th"
+    "${n}${tail}"
+
+// The English name of a weekday.
+fn day_name(w: civil.Weekday) -> Str
+    match w
+        Mon => "Monday"
+        Tue => "Tuesday"
+        Wed => "Wednesday"
+        Thu => "Thursday"
+        Fri => "Friday"
+        Sat => "Saturday"
+        Sun => "Sunday"
+
+// The English name of month `m`, 1 to 12.
+fn month_name(m: Int) -> Str
+    let names = ["January", "February", "March", "April", "May", "June", "July", "August",
+                 "September", "October", "November", "December"]
+    names[(m - 1) % 12]
+
+// An `UNTIL` in words: the date, and the time when it is not midnight.
+fn until_words(at: civil.CivilDateTime) -> Str
+    let day = "${pad(at.date.year, 4)}-${pad(at.date.month, 2)}-${pad(at.date.day, 2)}"
+    if at.time.hour == 0 and at.time.minute == 0 and at.time.second == 0
+        day
+    else
+        "${day} ${pad(at.time.hour, 2)}:${pad(at.time.minute, 2)}"

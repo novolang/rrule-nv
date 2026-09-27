@@ -1,0 +1,83 @@
+// tests/grammar_tests.nv — every value the RECUR grammar reads and
+// refuses, the canonical print of every part, and the English sentence.
+
+use std.test
+use rruleerror
+use rruleparse
+
+// The refusal code for a value, or `"ok"` when it parses.
+fn outcome(value: Str) -> Str
+    match rruleparse.parse(value)
+        Ok(_)  => "ok"
+        Err(e) => rruleerror.code(e)
+
+// The canonical print of a value that parses, or its refusal code.
+fn reprint(value: Str) -> Str
+    match rruleparse.parse(value)
+        Ok(r)  => rruleparse.print(r)
+        Err(e) => rruleerror.code(e)
+
+@test
+fn test_a_value_that_is_not_what_its_part_takes_is_refused()
+    test.assert_eq(outcome(""), "missing-freq")
+    test.assert_eq(outcome("FREQ=FORTNIGHTLY"), "bad-value")
+    test.assert_eq(outcome("FREQ=DAILY;COUNT=ten"), "bad-value")
+    test.assert_eq(outcome("FREQ=DAILY;INTERVAL="), "bad-value")
+    test.assert_eq(outcome("FREQ=DAILY;INTERVAL=0"), "interval-not-positive")
+    test.assert_eq(outcome("FREQ=DAILY;BYHOUR=9,x"), "bad-value")
+    test.assert_eq(outcome("FREQ=DAILY;BYHOUR="), "bad-value")
+    test.assert_eq(outcome("FREQ=WEEKLY;BYDAY=MO,XX"), "bad-value")
+    test.assert_eq(outcome("FREQ=WEEKLY;BYDAY="), "bad-value")
+    test.assert_eq(outcome("FREQ=WEEKLY;WKST=XX"), "bad-value")
+    test.assert_eq(outcome("FREQ=DAILY;COUNT"), "bad-value")
+    test.assert_eq(outcome("FREQ=DAILY;UNTIL=2026"), "bad-value")
+    test.assert_eq(outcome("FREQ=DAILY;UNTIL=20260230"), "bad-value")
+    test.assert_eq(outcome("FREQ=DAILY;UNTIL=20260101X000000"), "bad-value")
+    test.assert_eq(outcome("FREQ=DAILY;UNTIL=20260101T000000X"), "bad-value")
+    test.assert_eq(outcome("FREQ=DAILY;UNTIL=20260101T250000"), "bad-value")
+    test.assert_eq(outcome("FREQ=DAILY;BYYEARDAY=1"), "part-not-applicable")
+
+@test
+fn test_the_parts_come_in_any_order_and_print_in_the_grammar_s()
+    test.assert_eq(reprint("wkst=su;byday=-1fr;freq=monthly;interval=2"),
+        "FREQ=MONTHLY;INTERVAL=2;BYDAY=-1FR;WKST=SU")
+    test.assert_eq(reprint("FREQ=SECONDLY;BYSECOND=0,30;BYMINUTE=5;BYHOUR=9;COUNT=2"),
+                   "FREQ=SECONDLY;COUNT=2;BYSECOND=0,30;BYMINUTE=5;BYHOUR=9")
+    test.assert_eq(reprint("FREQ=YEARLY;BYSETPOS=1;BYMONTH=1;BYWEEKNO=2;BYYEARDAY=3;BYMONTHDAY=4"),
+                   "FREQ=YEARLY;BYMONTHDAY=4;BYYEARDAY=3;BYWEEKNO=2;BYMONTH=1;BYSETPOS=1")
+    test.assert_eq(reprint("FREQ=DAILY;UNTIL=20261231"), "FREQ=DAILY;UNTIL=20261231")
+    test.assert_eq(reprint("FREQ=DAILY;UNTIL=20261231T235959"), "FREQ=DAILY;UNTIL=20261231T235959")
+    test.assert_eq(reprint("FREQ=DAILY;UNTIL=20261231T235959Z"), "FREQ=DAILY;UNTIL=20261231T235959Z")
+
+@test
+fn test_a_content_line_names_its_property()
+    match rruleparse.parse_line("RRULE;X-NOTE=1:FREQ=DAILY")
+        Ok(r)  => test.assert_eq(rruleparse.print_line(r), "RRULE:FREQ=DAILY")
+        Err(_) => test.fail("a parameter on the property is allowed")
+    match rruleparse.parse_line("EXDATE:20260101")
+        Ok(_)  => test.fail("that is not an RRULE line")
+        Err(e) => test.assert_eq(rruleerror.message(e), "the line is EXDATE, not RRULE")
+    match rruleparse.parse_line("FREQ=DAILY")
+        Ok(_)  => test.fail("a line has a property name")
+        Err(e) => test.assert_eq(rruleerror.code(e), "wrong-property")
+
+// The sentence for a value.
+fn words(value: Str) -> Str
+    match rruleparse.parse(value)
+        Ok(r)  => rruleparse.describe(r)
+        Err(e) => rruleerror.code(e)
+
+@test
+fn test_the_sentence_names_every_part()
+    test.assert_eq(words("FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE;COUNT=10"),
+        "every 2 weeks on Monday and Wednesday, 10 times")
+    test.assert_eq(words("FREQ=MONTHLY;BYDAY=1FR,-1SU,-2MO,2TU,3WE,4TH,11SA,12SA,13SA,21SA,22SA,23SA"),
+                   "every month on the 1st Friday, the last Sunday, the 2nd-to-last Monday, the 2nd Tuesday, the 3rd Wednesday, the 4th Thursday, the 11th Saturday, the 12th Saturday, the 13th Saturday, the 21st Saturday, the 22nd Saturday and the 23rd Saturday")
+    test.assert_eq(words("FREQ=YEARLY;BYMONTH=1,12;BYMONTHDAY=1;BYYEARDAY=1;BYWEEKNO=1"),
+                   "every year on day 1 of the month on day 1 of the year in week 1 in January and December")
+    test.assert_eq(words("FREQ=DAILY;BYHOUR=9;BYMINUTE=0,30;BYSECOND=15;UNTIL=20261231"),
+                   "every day at hour 9 at minute 0 and 30 at second 15, until 2026-12-31")
+    test.assert_eq(words("FREQ=HOURLY;UNTIL=20261231T083000;BYSETPOS=1;BYMINUTE=0"),
+                   "every hour at minute 0, taking occurrence 1 of each, until 2026-12-31 08:30")
+    test.assert_eq(words("FREQ=MINUTELY"), "every minute")
+    test.assert_eq(words("FREQ=SECONDLY;INTERVAL=5"), "every 5 seconds")

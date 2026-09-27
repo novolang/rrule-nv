@@ -1,27 +1,19 @@
-// rruleerror.nv — every way a recurrence rule can be refused.
+// rruleerror — every way a recurrence rule can be refused.
 //
-// THE GRAMMAR AND THE SEMANTICS ARE BOTH REFUSALS, AND THE CALLER
-// NEEDS TO TELL THEM APART
+// Half of these are faults in the text: a part nobody has heard of, a
+// part written twice, a value that is not a number, a number outside
+// the range RFC 5545 gives it.  The other half are rules that parse and
+// cannot mean anything: `COUNT` and `UNTIL` together, a `BYSETPOS` with
+// nothing to select from, an `UNTIL` whose value type disagrees with
+// `DTSTART`'s.  A text fault is in a string somebody typed or a server
+// sent, and the answer is to show the text.  A rule fault can come from
+// a rule composed with the builders in `rrulespec`, and the answer is to
+// fix the program.  `is_grammar_fault` is the divide.
 //
-// Half of these are faults in the text — a part nobody has heard of,
-// a part written twice, a number outside the range RFC 5545 gives it.
-// The other half are rules that parse and cannot mean anything:
-// `COUNT` and `UNTIL` together, a `BYSETPOS` with nothing to select
-// from, an `UNTIL` whose value type disagrees with `DTSTART`'s.
-//
-// The distinction matters because the two arrive from different
-// places.  A grammar fault is in a string somebody typed or a server
-// sent, and the answer is to show the text.  A semantic fault is in a
-// rule somebody composed with the builders in `rrulespec`, and the
-// answer is to fix the program.  `is_grammar_fault` is the divide.
-//
-// UNTIL AND DTSTART ARE THE ONE PEOPLE MEET
-//
-// RFC 5545 § 3.3.10 requires that `UNTIL`'s value type match
-// `DTSTART`'s: a date-valued `DTSTART` takes a date-valued `UNTIL`, a
-// UTC `DTSTART` takes a UTC `UNTIL`.  Implementations coerce instead,
-// and the symptom is a series that ends a day early or a day late for
-// half the year.  Here it is `RruleUntilKindMismatch` with both kinds
+// RFC 5545 section 3.3.10 requires `UNTIL`'s value type to match
+// `DTSTART`'s: a date-valued `DTSTART` takes a date-valued `UNTIL`.
+// Implementations that coerce instead end a series a day early or a day
+// late.  Here the mismatch is `RruleUntilKindMismatch`, with both kinds
 // named.
 
 // Why a recurrence rule, or a set built from one, was refused.
@@ -48,15 +40,15 @@ pub enum RruleError
     // last wins, first wins — disagree, so neither is chosen.
     RruleDuplicatePart(name: Str)
     // `COUNT` and `UNTIL` are both present.  The specification says
-    // they MUST NOT occur in the same rule, because they are two
+    // they must not occur in the same rule, because they are two
     // answers to one question.
     RruleBothCountAndUntil
     // `UNTIL`'s value type is not `DTSTART`'s.  `dtstart_kind` and
     // `until_kind` are `"date"`, `"local"` or `"utc"`.
     RruleUntilKindMismatch(dtstart_kind: Str, until_kind: Str)
-    // A `BYxxx` value is outside the range the specification gives
-    // it — a `BYMONTH` of 13, a `BYHOUR` of 24, a `BYMONTHDAY` of 0,
-    // a `BYYEARDAY` of 367.
+    // A value is outside the range the specification gives it: a
+    // `BYMONTH` of 13, a `BYHOUR` of 24, a `BYMONTHDAY` of 0, a
+    // `BYYEARDAY` of 367, a `COUNT` of 0.
     RruleValueOutOfRange(part: Str, value: Int)
     // `INTERVAL` is zero or negative.  RFC 5545 § 3.3.10 requires a
     // positive integer, and an interval of zero is a rule whose next
@@ -79,18 +71,28 @@ pub enum RruleError
     // infinitely many, with no bound.  See `rruleiter.is_bounded`,
     // which answers the same question first.
     RruleUnboundedRecurrence
+    // A `BYxxx` part RFC 5545 section 3.3.10's table marks not
+    // applicable to the frequency: `BYYEARDAY` under `DAILY`, `WEEKLY` or
+    // `MONTHLY`, and `BYMONTHDAY` under `WEEKLY`.  `part` and `freq` are
+    // the names as the specification writes them.
+    RrulePartNotApplicable(part: Str, freq: Str)
+    // A value that is not what its part takes: `COUNT=ten`,
+    // `FREQ=FORTNIGHTLY`, `BYDAY=XX`.  `text` is the value as written.
+    RruleBadValue(part: Str, text: Str)
+    // A content line whose property is not `RRULE`.  `name` is the
+    // property it named.
+    RruleWrongProperty(name: Str)
+    // A `BYHOUR`, `BYMINUTE` or `BYSECOND` part in a date-valued set.
+    // A date has no time of day for the part to replace.
+    RruleTimePartWithDate(part: Str)
 
-// `RruleError` is an `Error`, which is what lets
-// `Result<T, RruleError>` exist at all — `rruleparse.parse`,
-// `rruleparse.parse_line` and `rruleiter.count_occurrences` all answer
-// with one.
+// `RruleError` is an `Error`, which `Result<T, RruleError>` requires
+// (SPEC § 3.4): `rruleparse.parse`, `rruleparse.parse_line` and
+// `rruleiter.count_occurrences` all answer one.
 impl Error for RruleError
-    // The one-line message: `rruleerror.message`'s sentence, the
-    // refusal named with the part or the value it was about.
-    //
-    // Panics with `not implemented` until the bodies land.
+    // `rruleerror.message`'s sentence.
     fn message(self) -> Str
-        todo("rrule-nv.RruleError.message")
+        message(self)
 
 // The refusal as a sentence, ending without a full stop, suitable for
 // a log line or an error message the caller composes.
@@ -102,7 +104,22 @@ impl Error for RruleError
 //     println(rruleerror.message(RruleDuplicatePart("BYDAY")))
 // ```
 pub fn message(e: RruleError) -> Str []
-    todo("rrule-nv.rruleerror.message")
+    match e
+        RruleMissingFreq                                => "the rule has no FREQ part"
+        RruleUnknownPart(name)                          => "unknown part ${name}"
+        RruleDuplicatePart(name)                        => "the part ${name} appears twice"
+        RruleBothCountAndUntil                          => "COUNT and UNTIL must not both appear"
+        RruleUntilKindMismatch(start, until)            => "UNTIL is a ${until} value and DTSTART a ${start} one"
+        RruleValueOutOfRange(part, value)               => "${part} value ${value} is out of range"
+        RruleIntervalNotPositive(value)                 => "INTERVAL ${value} is not positive"
+        RruleBySetPosWithoutOtherPart                   => "BYSETPOS needs another BYxxx part to select from"
+        RruleByWeekNoNeedsYearly                        => "BYWEEKNO needs FREQ=YEARLY"
+        RruleOrdinalWeekdayNeedsMonthlyOrYearly(day, n) => "BYDAY ${n}${day} needs FREQ=MONTHLY or FREQ=YEARLY"
+        RruleUnboundedRecurrence                        => "the recurrence has no end"
+        RrulePartNotApplicable(part, freq)              => "${part} does not apply under FREQ=${freq}"
+        RruleBadValue(part, text)                       => "${part} value '${text}' is not valid"
+        RruleWrongProperty(name)                        => "the line is ${name}, not RRULE"
+        RruleTimePartWithDate(part)                     => "${part} needs a DTSTART with a time of day"
 
 // A short stable identifier for the refusal: `"missing-freq"`,
 // `"unknown-part"`, `"until-kind-mismatch"` and the rest.
@@ -117,14 +134,32 @@ pub fn message(e: RruleError) -> Str []
 //     println(rruleerror.code(RruleBothCountAndUntil))   // both-count-and-until
 // ```
 pub fn code(e: RruleError) -> Str []
-    todo("rrule-nv.rruleerror.code")
+    match e
+        RruleMissingFreq                              => "missing-freq"
+        RruleUnknownPart(_)                           => "unknown-part"
+        RruleDuplicatePart(_)                         => "duplicate-part"
+        RruleBothCountAndUntil                        => "both-count-and-until"
+        RruleUntilKindMismatch(_, _)                  => "until-kind-mismatch"
+        RruleValueOutOfRange(_, _)                    => "value-out-of-range"
+        RruleIntervalNotPositive(_)                   => "interval-not-positive"
+        RruleBySetPosWithoutOtherPart                 => "by-set-pos-without-other-part"
+        RruleByWeekNoNeedsYearly                      => "by-week-no-needs-yearly"
+        RruleOrdinalWeekdayNeedsMonthlyOrYearly(_, _) => "ordinal-weekday-needs-monthly-or-yearly"
+        RruleUnboundedRecurrence                      => "unbounded-recurrence"
+        RrulePartNotApplicable(_, _)                  => "part-not-applicable"
+        RruleBadValue(_, _)                           => "bad-value"
+        RruleWrongProperty(_)                         => "wrong-property"
+        RruleTimePartWithDate(_)                      => "time-part-with-date"
 
 // Whether the refusal is a fault in the text rather than in the rule
 // the text describes.
 //
-// True for the three that only a parser can meet — an unknown part, a
-// repeated part, a value out of range.  False for the rest, which a
-// rule composed in a program reaches just as easily.
+// True for the five that only text can carry: an unknown part, a
+// repeated part, a value that is not what its part takes, a value out of
+// range as written, and a line naming another property.  False for the
+// rest, which a rule composed in a program reaches just as easily.  A
+// value out of range is counted as text, because a builder takes an
+// `Int` and a parser is where a stray `13` usually comes from.
 //
 // ```novo
 // use rruleerror
@@ -134,4 +169,10 @@ pub fn code(e: RruleError) -> Str []
 //     println("${rruleerror.is_grammar_fault(RruleBothCountAndUntil)}")
 // ```
 pub fn is_grammar_fault(e: RruleError) -> Bool []
-    todo("rrule-nv.rruleerror.is_grammar_fault")
+    match e
+        RruleUnknownPart(_)        => true
+        RruleDuplicatePart(_)      => true
+        RruleValueOutOfRange(_, _) => true
+        RruleBadValue(_, _)        => true
+        RruleWrongProperty(_)      => true
+        _                          => false

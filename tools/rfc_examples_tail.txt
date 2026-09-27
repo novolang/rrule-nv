@@ -1,0 +1,43 @@
+
+// A field of `YYYYMMDDTHHMMSS` as a number.
+fn field(text: Str, from: Int, to: Int) -> Int
+    str.to_int(str.slice(text, from, to)) ?? 0
+
+// A civil date-time from `YYYYMMDDTHHMMSS`.
+fn at(text: Str) -> civil.CivilDateTime
+    let d = CivilDate { year: field(text, 0, 4), month: field(text, 4, 6), day: field(text, 6, 8) }
+    let t = CivilTime { hour: field(text, 9, 11),
+        minute: field(text, 11, 13),
+        second: field(text, 13, 15),
+        nano: 0 }
+    civil.datetime(d, t)
+
+// `n` in at least `width` digits.
+fn pad(n: Int, width: Int) -> Str
+    str.pad_left("${n}", width, "0")
+
+// The occurrences as the table writes them, comma-separated.
+fn stamps(xs: [civil.CivilDateTime]) -> Str
+    var out: [Str] = []
+    for x in xs
+        let d = x.date
+        let t = x.time
+        list.push(out,
+            "${pad(d.year, 4)}${pad(d.month, 2)}${pad(d.day, 2)}T${pad(t.hour, 2)}${pad(t.minute, 2)}${pad(t.second, 2)}")
+    str.join(out, ",")
+
+@test
+fn test_every_example_of_rfc_5545_section_3_8_5_3()
+    for line in str.split(examples(), "\n")
+        let f = str.split(line, "|")
+        test.case(f[0])
+        match rruleparse.parse(f[2])
+            Err(e) => test.fail("${f[0]}: ${rruleerror.code(e)}")
+            Ok(r)  =>
+                let s = rruleset.with_rule(rruleset.set(at(f[1]), false), r)
+                let n = list.len(str.split(f[3], ","))
+                test.assert_eq(stamps(rruleiter.occurrences(s, n)), f[3])
+                if rruleiter.is_bounded(s)
+                    match rruleiter.count_occurrences(s)
+                        Ok(total) => test.assert_eq(total, n)
+                        Err(_)    => test.fail("a bounded set has a count")

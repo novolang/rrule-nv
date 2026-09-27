@@ -1,0 +1,438 @@
+// rrulegen — the generator under `rruleset` and `rruleiter`: one rule's
+// occurrences, an interval at a time.
+//
+// Nothing here is public.  The generator works in seconds counted from
+// 1970-01-01T00:00:00 on the wall clock, which is a count of civil
+// seconds and not an instant: there is no zone anywhere in the package.
+// A day is exactly 86400 of them.
+//
+// A rule is prepared into a `Plan` first.  RFC 5545 section 3.3.10 takes
+// the parts a rule leaves out from `DTSTART`: a yearly rule with no day
+// part recurs on `DTSTART`'s month and day, a monthly one on its day of
+// the month, a weekly one on its weekday, and every frequency coarser
+// than a second takes the time of day it does not name from `DTSTART`.
+// The plan holds those filled in, as python-dateutil's `rrule` does.
+//
+// Interval `k` of a rule is the frequency's period that starts `k`
+// times `INTERVAL` periods after the one holding `DTSTART`: a year, a
+// month, a week starting on `WKST`, a day, an hour, a minute or a
+// second.  Its occurrences are its days that every day part keeps, each
+// at every time of day the time parts give, with `BYSETPOS` applied to
+// the whole of that list.  An interval can be computed on its own, so a
+// search can start at the interval holding any instant.
+//
+// A rule whose parts no day can satisfy, such as `BYMONTH=2;BYMONTHDAY=30`,
+// has no occurrences.  The search stops at the end of the year 9999,
+// the last year RFC 5545's four-digit dates can write.
+
+use std.list
+use civil
+use rrulefreq
+use rrulespec
+
+// A rule with its defaults filled in from `DTSTART`, ready to generate.
+struct Plan
+    // 1 for `SECONDLY` up to 7 for `YEARLY`.
+    rank: Int
+    // `INTERVAL`.
+    step: Int
+    // `DTSTART`, in civil seconds.
+    start: Int
+    // The last civil second an occurrence may fall on, or the largest
+    // `Int` when the rule has no `UNTIL`.
+    until: Int
+    // `COUNT`, or 0 when the rule has none.
+    count: Int
+    // `WKST`, 1 for Monday to 7 for Sunday.
+    wkst: Int
+    months: [Int]
+    weeknos: [Int]
+    yeardays: [Int]
+    monthdays: [Int]
+    // Weekdays that match every occurrence of themselves, 1 to 7.
+    weekdays: [Int]
+    // Weekdays with an ordinal, under `MONTHLY` and `YEARLY` only: the
+    // weekday, 1 to 7, and beside it at the same index the ordinal.
+    nth_days: [Int]
+    nth_ordinals: [Int]
+    hours: [Int]
+    minutes: [Int]
+    seconds: [Int]
+    setpos: [Int]
+
+// The last civil second of the year 9999.
+fn horizon() -> Int
+    253402300799
+
+// `a / b` rounded toward negative infinity, for a positive `b`.
+fn floor_div(a: Int, b: Int) -> Int
+    let q = a / b
+    if a % b < 0
+        q - 1
+    else
+        q
+
+// A civil date-time as civil seconds.  Nanoseconds are dropped.
+fn seconds_of(dt: civil.CivilDateTime) -> Int
+    civil.epoch_day(dt.date) * 86400 + dt.time.hour * 3600 + dt.time.minute * 60 + dt.time.second
+
+// Civil seconds as a civil date-time.
+fn civil_of(s: Int) -> civil.CivilDateTime
+    let days = floor_div(s, 86400)
+    let sod = s - days * 86400
+    let t = CivilTime { hour: sod / 3600, minute: sod / 60 % 60, second: sod % 60, nano: 0 }
+    civil.datetime(civil.date_from_epoch_day(days), t)
+
+// The weekday of epoch day `ed`, 1 for Monday to 7 for Sunday.
+fn weekday_of_day(ed: Int) -> Int
+    let r = (ed + 3) % 7
+    if r < 0
+        r + 8
+    else
+        r + 1
+
+// The rank of a frequency: 1 for `SECONDLY` up to 7 for `YEARLY`.
+fn rank_of(f: rrulefreq.RruleFreq) -> Int
+    match f
+        RruleSecondly => 1
+        RruleMinutely => 2
+        RruleHourly   => 3
+        RruleDaily    => 4
+        RruleWeekly   => 5
+        RruleMonthly  => 6
+        RruleYearly   => 7
+
+// The sorted, duplicate-free copy of a list.
+fn sorted_set(xs: [Int]) -> [Int]
+    var out: [Int] = []
+    for x in xs
+        if not list.contains(out, x)
+            list.push(out, x)
+    list.sort(out)
+    out
+
+// `values` when it is not empty, else `[fallback]` when `fill`, else
+// the empty list.
+fn or_default(values: [Int], fill: Bool, fallback: Int) -> [Int]
+    if list.len(values) > 0
+        sorted_set(values)
+    else if fill
+        [fallback]
+    else
+        []
+
+// A rule prepared against its `DTSTART`.
+fn plan(r: rrulespec.Rrule, dtstart: civil.CivilDateTime) -> Plan
+    let rank = rank_of(r.freq)
+    let start = seconds_of(dtstart)
+    let bare = list.len(r.by_weekno) + list.len(r.by_yearday) + list.len(r.by_monthday) + list.len(r.by_day) == 0
+    var weekdays: [Int] = []
+    var nth_days: [Int] = []
+    var nth_ordinals: [Int] = []
+    for w in r.by_day
+        let day = civil.weekday_number(w.weekday)
+        if w.ordinal != 0 and rank >= 6
+            list.push(nth_days, day)
+            list.push(nth_ordinals, w.ordinal)
+        else
+            list.push(weekdays, day)
+    if bare and rank == 5
+        weekdays = [civil.weekday_number(civil.weekday(dtstart.date))]
+    let months = if bare and rank == 7 and list.len(r.by_month) == 0
+        [dtstart.date.month]
+    else
+        sorted_set(r.by_month)
+    let monthdays = if bare and rank >= 6
+        [dtstart.date.day]
+    else
+        r.by_monthday[:]
+    Plan {
+        rank: rank,
+        step: r.interval,
+        start: start,
+        until: until_of(r.end),
+        count: count_of(r.end),
+        wkst: civil.weekday_number(r.wkst),
+        months: months,
+        weeknos: r.by_weekno[:],
+        yeardays: r.by_yearday[:],
+        monthdays: monthdays,
+        weekdays: sorted_set(weekdays),
+        nth_days: nth_days,
+        nth_ordinals: nth_ordinals,
+        hours: or_default(r.by_hour, rank > 3, dtstart.time.hour),
+        minutes: or_default(r.by_minute, rank > 2, dtstart.time.minute),
+        seconds: or_default(r.by_second, rank > 1, dtstart.time.second),
+        setpos: r.by_setpos[:] }
+
+// The last civil second an `UNTIL` allows.  A date `UNTIL` allows the
+// whole of its day.
+fn until_of(e: rrulespec.RruleEnd) -> Int
+    match e
+        RruleUntil(at, RruleUntilDate) => civil.epoch_day(at.date) * 86400 + 86399
+        RruleUntil(at, _)              => seconds_of(at)
+        _                              => 9223372036854775807
+
+// `COUNT`, or 0.
+fn count_of(e: rrulespec.RruleEnd) -> Int
+    match e
+        RruleCount(n) => n
+        _             => 0
+
+// ── The day parts ───────────────────────────────────────────────────
+
+// Whether `n`, counted from the start of a run of `len`, is in
+// `values` either counted from the start (1-based) or from the end
+// (-1 for the last).
+fn in_either(values: [Int], n: Int, len: Int) -> Bool
+    list.contains(values, n) or list.contains(values, n - len - 1)
+
+// The epoch day on which week 1 of year `y` starts, for weeks starting
+// on weekday `wkst`: the week holding at least four days of `y`.
+fn week_one(y: Int, wkst: Int) -> Int
+    let jan1 = civil.epoch_day(CivilDate { year: y, month: 1, day: 1 })
+    let back = (weekday_of_day(jan1) - wkst + 7) % 7
+    if back <= 3
+        jan1 - back
+    else
+        jan1 + 7 - back
+
+// Whether epoch day `ed` is in one of the plan's week numbers.
+fn week_ok(p: Plan, ed: Int, y: Int) -> Bool
+    var year = y
+    if ed < week_one(y, p.wkst)
+        year = y - 1
+    else if ed >= week_one(y + 1, p.wkst)
+        year = y + 1
+    let first = week_one(year, p.wkst)
+    let weeks = (week_one(year + 1, p.wkst) - first) / 7
+    in_either(p.weeknos, (ed - first) / 7 + 1, weeks)
+
+// Whether epoch day `ed` is one of the weekdays with an ordinal: the
+// ordinal counts within the month under `MONTHLY`, and under `YEARLY`
+// within the month when `BYMONTH` is present and the year otherwise.
+fn nth_ok(p: Plan, d: civil.CivilDate, ed: Int) -> Bool
+    let by_month = p.rank == 6 or list.len(p.months) > 0
+    let first = if by_month
+        civil.epoch_day(CivilDate { year: d.year, month: d.month, day: 1 })
+    else
+        civil.epoch_day(CivilDate { year: d.year, month: 1, day: 1 })
+    let len = if by_month
+        civil.days_in_month(d.year, d.month)
+    else
+        year_length(d.year)
+    let index = ed - first
+    let wd = weekday_of_day(ed)
+    for i in 0..list.len(p.nth_days)
+        let n = p.nth_ordinals[i]
+        if p.nth_days[i] == wd and (n == index / 7 + 1 or n == -((len - 1 - index) / 7 + 1))
+            return true
+    false
+
+// The days in year `y`.
+fn year_length(y: Int) -> Int
+    if civil.is_leap_year(y)
+        366
+    else
+        365
+
+// Whether every day part keeps epoch day `ed`.
+fn day_ok(p: Plan, ed: Int) -> Bool
+    let d = civil.date_from_epoch_day(ed)
+    if list.len(p.months) > 0 and not list.contains(p.months, d.month)
+        return false
+    if list.len(p.weeknos) > 0 and not week_ok(p, ed, d.year)
+        return false
+    if list.len(p.weekdays) + list.len(p.nth_days) > 0
+        if not list.contains(p.weekdays, weekday_of_day(ed)) and not nth_ok(p, d, ed)
+            return false
+    if list.len(p.monthdays) > 0 and not in_either(p.monthdays, d.day, civil.days_in_month(d.year, d.month))
+        return false
+    if list.len(p.yeardays) > 0 and not in_either(p.yeardays, civil.day_of_year(d), year_length(d.year))
+        return false
+    true
+
+// ── Intervals ───────────────────────────────────────────────────────
+
+// The unit the finer frequencies count in, in seconds: an hour, a
+// minute or a second.
+fn unit_seconds(rank: Int) -> Int
+    match rank
+        3 => 3600
+        2 => 60
+        _ => 1
+
+// The epoch day of the start of the week holding epoch day `ed`.
+fn week_start(p: Plan, ed: Int) -> Int
+    ed - (weekday_of_day(ed) - p.wkst + 7) % 7
+
+// A month counted from year 0: `year * 12 + month - 1`.
+fn month_index(d: civil.CivilDate) -> Int
+    d.year * 12 + d.month - 1
+
+// The interval holding civil second `s`, counting from 0 at the one
+// holding `DTSTART`, and never below 0.
+fn interval_of(p: Plan, s: Int) -> Int
+    if s <= p.start
+        return 0
+    let d = civil.date_from_epoch_day(floor_div(s, 86400))
+    let d0 = civil.date_from_epoch_day(floor_div(p.start, 86400))
+    let span = match p.rank
+        7 => d.year - d0.year
+        6 => month_index(d) - month_index(d0)
+        5 => (week_start(p, floor_div(s, 86400)) - week_start(p, floor_div(p.start, 86400))) / 7
+        4 => floor_div(s, 86400) - floor_div(p.start, 86400)
+        _ => floor_div(s, unit_seconds(p.rank)) - floor_div(p.start, unit_seconds(p.rank))
+    floor_div(span, p.step)
+
+// The epoch days interval `k` covers, and for the finer frequencies the
+// civil second its period starts at, as `(first_day, day_count,
+// period_second)`.  `period_second` is 0 for a day or longer, where it
+// is not read.
+fn period(p: Plan, k: Int) -> (Int, Int, Int)
+    let d0 = civil.date_from_epoch_day(floor_div(p.start, 86400))
+    let n = k * p.step
+    match p.rank
+        7 =>
+            let y = d0.year + n
+            (civil.epoch_day(CivilDate { year: y, month: 1, day: 1 }), year_length(y), 0)
+        6 =>
+            let m = month_index(d0) + n
+            let y = floor_div(m, 12)
+            let month = m - y * 12 + 1
+            (civil.epoch_day(CivilDate { year: y, month: month, day: 1 }),
+                civil.days_in_month(y, month),
+                0)
+        5 => (week_start(p, floor_div(p.start, 86400)) + 7 * n, 7, 0)
+        4 => (floor_div(p.start, 86400) + n, 1, 0)
+        _ =>
+            let unit = unit_seconds(p.rank)
+            let at = (floor_div(p.start, unit) + n) * unit
+            (floor_div(at, 86400), 1, at)
+
+// The times of day, as seconds of the day, that a period has on each
+// of its days.  `at` is the civil second a period finer than a day
+// starts at, and is not read for a day or longer.
+//
+// A day or longer takes every combination of the hours, minutes and
+// seconds.  A finer period has one hour, or one minute, or one second
+// of its own, which the time parts at or above its frequency may reject,
+// and it takes every combination of the parts below.
+fn times(p: Plan, at: Int) -> [Int]
+    var out: [Int] = []
+    if p.rank >= 4
+        for h in p.hours
+            for m in p.minutes
+                for s in p.seconds
+                    list.push(out, h * 3600 + m * 60 + s)
+        return out
+    let sod = at - floor_div(at, 86400) * 86400
+    let h = sod / 3600
+    let m = sod / 60 % 60
+    if not allows(p.hours, h)
+        return out
+    if p.rank <= 2 and not allows(p.minutes, m)
+        return out
+    if p.rank == 1
+        if allows(p.seconds, sod % 60)
+            list.push(out, sod)
+        return out
+    let minutes = if p.rank == 3
+        p.minutes
+    else
+        [m]
+    for mm in minutes
+        for s in p.seconds
+            list.push(out, h * 3600 + mm * 60 + s)
+    out
+
+// Whether a limiting list allows `v`: it is empty, or it holds `v`.
+fn allows(values: [Int], v: Int) -> Bool
+    list.len(values) == 0 or list.contains(values, v)
+
+// The occurrences of interval `k`, ascending, with `BYSETPOS` applied,
+// before `DTSTART`, `UNTIL` and `COUNT` are.
+fn interval_set(p: Plan, k: Int) -> [Int]
+    let (first, days, at) = period(p, k)
+    let clock = times(p, at)
+    var all: [Int] = []
+    if list.len(clock) == 0
+        return all
+    for ed in first..first + days
+        if day_ok(p, ed)
+            for t in clock
+                list.push(all, ed * 86400 + t)
+    if list.len(p.setpos) == 0
+        return all
+    var chosen: [Int] = []
+    let n = list.len(all)
+    for pos in p.setpos
+        let i = if pos > 0
+            pos - 1
+        else
+            n + pos
+        if i >= 0 and i < n and not list.contains(chosen, all[i])
+            list.push(chosen, all[i])
+    list.sort(chosen)
+    chosen
+
+// The first interval after `k` worth expanding.  For the frequencies
+// finer than a day, an interval on a day no day part keeps is skipped
+// together with the rest of that day.
+fn next_interval(p: Plan, k: Int) -> Int
+    if p.rank > 3
+        return k + 1
+    let (first, _days, _at) = period(p, k)
+    if day_ok(p, first)
+        return k + 1
+    let unit = unit_seconds(p.rank)
+    let next_day = (first + 1) * 86400
+    let units = floor_div(next_day, unit) - floor_div(p.start, unit)
+    let skip = floor_div(units + p.step - 1, p.step)
+    if skip > k + 1
+        skip
+    else
+        k + 1
+
+// The first occurrence of the rule at or after civil second `floor`,
+// ignoring `COUNT`, or `None` when there is none before `UNTIL` and the
+// end of the year 9999.  `DTSTART` is not added: the set does that.
+fn first_from(p: Plan, floor: Int) -> ?Int
+    let from = if floor < p.start
+        p.start
+    else
+        floor
+    var k = interval_of(p, from)
+    let last = if p.until < horizon()
+        p.until
+    else
+        horizon()
+    var result: ?Int = None
+    var searching = true
+    while searching
+        let (first, _days, _at) = period(p, k)
+        if first * 86400 > last
+            searching = false
+        else
+            for o in interval_set(p, k)
+                if searching and o >= from and o <= last
+                    result = Some(o)
+                    searching = false
+            k = next_interval(p, k)
+    result
+
+// The rule's occurrences under its `COUNT`: `DTSTART` first, whether or
+// not the rule produces it, then the rule's own after it, `COUNT` in
+// all.
+fn counted(p: Plan) -> [Int]
+    var out: [Int] = [p.start]
+    var at = p.start + 1
+    var more = true
+    while more and list.len(out) < p.count
+        match first_from(p, at)
+            Some(o) =>
+                list.push(out, o)
+                at = o + 1
+            None    =>
+                more = false
+    out

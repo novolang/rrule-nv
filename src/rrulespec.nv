@@ -1,48 +1,29 @@
-// rrulespec.nv — the recurrence rule as a value, and the table that
+// rrulespec — the recurrence rule as a value, and the table that
 // decides what it means.
 //
-// EXPANSION AND LIMITATION, AND WHY THE TABLE IS PUBLIC
+// RFC 5545 section 3.3.10 carries a table with one row per `BYxxx` part
+// and one column per frequency, and every cell says one of two words:
+// the part expands the set the frequency generated, or it limits it.
+// That table is the whole of what a rule means.  A wrong cell raises
+// nothing: the rule still runs and generates a different series.
+// `FREQ=WEEKLY;BYMONTH=1` limits, keeping the weekly occurrences that
+// fall in January.  An implementation that expanded it would produce a
+// series nobody wrote.  So `part_role` is public and total, and a test
+// asserts the table against the specification's printed copy.
 //
-// RFC 5545 § 3.3.10 carries a table with one row per `BYxxx` part and
-// one column per frequency, and every cell says one of two words:
-// the part EXPANDS the set the frequency generated, or it LIMITS it.
-// That table is not a detail of an implementation.  It is the whole
-// of what a rule means, and it is the single thing every recurrence
-// library has got wrong at least once.
+// It is not a function of the frequency alone.  Both of the table's
+// footnotes are about `BYDAY`.  Under `MONTHLY` it expands, unless
+// `BYMONTHDAY` is present, and then it limits.  Under `YEARLY` it limits
+// when `BYYEARDAY` or `BYMONTHDAY` is present.  So `part_role` takes the
+// whole rule.
 //
-// The cost of getting a cell wrong is that the rule still runs.
-// `FREQ=WEEKLY;BYMONTH=1` limits — it keeps the weekly occurrences
-// that fall in January — and an implementation that expanded it
-// instead produces one occurrence per January per week, which is a
-// series that looks plausible and is not the one anybody wrote.  No
-// exception is raised, nothing is logged, and the person who finds
-// out is the one who missed a meeting.
-//
-// So `part_role` is public, it is total, and it is the function the
-// generator itself is built out of.  A caller that wants to explain a
-// rule to a person can ask it; a test can assert the whole table
-// against the RFC's own printed copy.
-//
-// AND IT IS NOT A FUNCTION OF THE FREQUENCY ALONE
-//
-// Two of the table's cells carry footnotes, and both are about
-// `BYDAY`.  Under `MONTHLY`, `BYDAY` expands — unless `BYMONTHDAY` is
-// also present, in which case it limits.  Under `YEARLY` the same
-// holds for `BYMONTHDAY` and `BYYEARDAY` together.  So a signature
-// `fn part_role(freq, part)` would be UNABLE TO GIVE THE RIGHT
-// ANSWER, and every library whose internals are shaped that way has a
-// special case somewhere else that the table does not explain.
-// `part_role` takes the whole rule.
-//
-// `BYSETPOS` IS APPLIED LAST, TO ONE INTERVAL AT A TIME
-//
-// `FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1` is the last weekday
-// of the month.  It cannot be computed from a stream of occurrences,
-// because "last" is only meaningful once a whole month's set exists.
-// That is why the generator in `rruleiter` produces an interval at a
-// time rather than an occurrence at a time, and why `BYSETPOS` with
-// no other part is refused rather than ignored.
+// `BYSETPOS` is applied last, to one interval's whole set:
+// `FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1` is the last weekday of
+// the month, and "last" means something only once the month's set
+// exists.  The generator in `rruleiter` works an interval at a time for
+// that reason, and `BYSETPOS` with no other part is refused.
 
+use std.list
 use civil
 use rruleerror
 use rrulefreq
@@ -84,10 +65,23 @@ pub enum RruleEnd
     // The rule generates exactly this many occurrences, counting the
     // `DTSTART` as the first.
     RruleCount(n: Int)
-    // The rule generates occurrences up to and including this
-    // instant.  Its value type must match `DTSTART`'s; see
-    // `RruleUntilKindMismatch`.
-    RruleUntil(at: civil.CivilDateTime)
+    // The rule generates occurrences up to and including this wall
+    // time.  `kind` is the value type `UNTIL` was written in, which must
+    // match `DTSTART`'s; see `RruleUntilKindMismatch`.
+    RruleUntil(at: civil.CivilDateTime, kind: RruleUntilKind)
+
+// The value type an `UNTIL` was written in (RFC 5545 section 3.3.10).
+//
+// A `UTC` one is compared with the occurrences as written.  A caller
+// whose `DTSTART` carries a time zone converts it to that zone's wall
+// time first, with tz-nv, because this package has no zones.
+pub enum RruleUntilKind
+    // A DATE: `UNTIL=19971224`.  The last day is included whole.
+    RruleUntilDate
+    // A DATE-TIME with no zone: `UNTIL=19971224T000000`.
+    RruleUntilLocal
+    // A DATE-TIME in UTC: `UNTIL=19971224T000000Z`.
+    RruleUntilUtc
 
 // A recurrence rule: one `FREQ`, an interval, an end, a week start,
 // and the nine `BYxxx` lists.
@@ -147,7 +141,20 @@ pub struct Rrule
 //     println(rrulefreq.freq_name(r.freq))      // DAILY
 // ```
 pub fn rule(freq: rrulefreq.RruleFreq) -> Rrule []
-    todo("rrule-nv.rrulespec.rule")
+    Rrule {
+        freq: freq,
+        interval: 1,
+        end: RruleNever,
+        wkst: Mon,
+        by_second: [],
+        by_minute: [],
+        by_hour: [],
+        by_day: [],
+        by_monthday: [],
+        by_yearday: [],
+        by_weekno: [],
+        by_month: [],
+        by_setpos: [] }
 
 // The same rule with a different `INTERVAL`.
 //
@@ -161,7 +168,20 @@ pub fn rule(freq: rrulefreq.RruleFreq) -> Rrule []
 //     println("${rrulespec.with_interval(rrulespec.rule(RruleDaily), 3).interval}")
 // ```
 pub fn with_interval(r: Rrule, interval: Int) -> Rrule []
-    todo("rrule-nv.rrulespec.with_interval")
+    Rrule {
+        freq: r.freq,
+        interval: interval,
+        end: r.end,
+        wkst: r.wkst,
+        by_second: r.by_second,
+        by_minute: r.by_minute,
+        by_hour: r.by_hour,
+        by_day: r.by_day,
+        by_monthday: r.by_monthday,
+        by_yearday: r.by_yearday,
+        by_weekno: r.by_weekno,
+        by_month: r.by_month,
+        by_setpos: r.by_setpos }
 
 // The same rule with a different end.
 //
@@ -173,7 +193,20 @@ pub fn with_interval(r: Rrule, interval: Int) -> Rrule []
 //     println("${rrulespec.is_finite(r)}")      // true
 // ```
 pub fn with_end(r: Rrule, end: RruleEnd) -> Rrule []
-    todo("rrule-nv.rrulespec.with_end")
+    Rrule {
+        freq: r.freq,
+        interval: r.interval,
+        end: end,
+        wkst: r.wkst,
+        by_second: r.by_second,
+        by_minute: r.by_minute,
+        by_hour: r.by_hour,
+        by_day: r.by_day,
+        by_monthday: r.by_monthday,
+        by_yearday: r.by_yearday,
+        by_weekno: r.by_weekno,
+        by_month: r.by_month,
+        by_setpos: r.by_setpos }
 
 // The same rule with a different week start.
 //
@@ -192,7 +225,20 @@ pub fn with_end(r: Rrule, end: RruleEnd) -> Rrule []
 //     println("${civil.weekday_number(r.wkst)}")     // 7
 // ```
 pub fn with_wkst(r: Rrule, wkst: civil.Weekday) -> Rrule []
-    todo("rrule-nv.rrulespec.with_wkst")
+    Rrule {
+        freq: r.freq,
+        interval: r.interval,
+        end: r.end,
+        wkst: wkst,
+        by_second: r.by_second,
+        by_minute: r.by_minute,
+        by_hour: r.by_hour,
+        by_day: r.by_day,
+        by_monthday: r.by_monthday,
+        by_yearday: r.by_yearday,
+        by_weekno: r.by_weekno,
+        by_month: r.by_month,
+        by_setpos: r.by_setpos }
 
 // The same rule with a `BYDAY` list.
 //
@@ -207,7 +253,20 @@ pub fn with_wkst(r: Rrule, wkst: civil.Weekday) -> Rrule []
 //     println("${list.len(r.by_day)}")       // 1
 // ```
 pub fn with_by_day(r: Rrule, by_day: [rrulefreq.RruleWeekdayNum]) -> Rrule []
-    todo("rrule-nv.rrulespec.with_by_day")
+    Rrule {
+        freq: r.freq,
+        interval: r.interval,
+        end: r.end,
+        wkst: r.wkst,
+        by_second: r.by_second,
+        by_minute: r.by_minute,
+        by_hour: r.by_hour,
+        by_day: by_day[:],
+        by_monthday: r.by_monthday,
+        by_yearday: r.by_yearday,
+        by_weekno: r.by_weekno,
+        by_month: r.by_month,
+        by_setpos: r.by_setpos }
 
 // The same rule with a `BYMONTH` list.
 //
@@ -219,7 +278,20 @@ pub fn with_by_day(r: Rrule, by_day: [rrulefreq.RruleWeekdayNum]) -> Rrule []
 //     println("${list.len(r.by_month)}")     // 2
 // ```
 pub fn with_by_month(r: Rrule, by_month: [Int]) -> Rrule []
-    todo("rrule-nv.rrulespec.with_by_month")
+    Rrule {
+        freq: r.freq,
+        interval: r.interval,
+        end: r.end,
+        wkst: r.wkst,
+        by_second: r.by_second,
+        by_minute: r.by_minute,
+        by_hour: r.by_hour,
+        by_day: r.by_day,
+        by_monthday: r.by_monthday,
+        by_yearday: r.by_yearday,
+        by_weekno: r.by_weekno,
+        by_month: by_month[:],
+        by_setpos: r.by_setpos }
 
 // The same rule with a `BYMONTHDAY` list.
 //
@@ -231,7 +303,20 @@ pub fn with_by_month(r: Rrule, by_month: [Int]) -> Rrule []
 //     println("${r.by_monthday[0]}")         // -1
 // ```
 pub fn with_by_monthday(r: Rrule, by_monthday: [Int]) -> Rrule []
-    todo("rrule-nv.rrulespec.with_by_monthday")
+    Rrule {
+        freq: r.freq,
+        interval: r.interval,
+        end: r.end,
+        wkst: r.wkst,
+        by_second: r.by_second,
+        by_minute: r.by_minute,
+        by_hour: r.by_hour,
+        by_day: r.by_day,
+        by_monthday: by_monthday[:],
+        by_yearday: r.by_yearday,
+        by_weekno: r.by_weekno,
+        by_month: r.by_month,
+        by_setpos: r.by_setpos }
 
 // The same rule with a `BYYEARDAY` list.
 //
@@ -243,7 +328,20 @@ pub fn with_by_monthday(r: Rrule, by_monthday: [Int]) -> Rrule []
 //     println("${list.len(r.by_yearday)}")   // 2
 // ```
 pub fn with_by_yearday(r: Rrule, by_yearday: [Int]) -> Rrule []
-    todo("rrule-nv.rrulespec.with_by_yearday")
+    Rrule {
+        freq: r.freq,
+        interval: r.interval,
+        end: r.end,
+        wkst: r.wkst,
+        by_second: r.by_second,
+        by_minute: r.by_minute,
+        by_hour: r.by_hour,
+        by_day: r.by_day,
+        by_monthday: r.by_monthday,
+        by_yearday: by_yearday[:],
+        by_weekno: r.by_weekno,
+        by_month: r.by_month,
+        by_setpos: r.by_setpos }
 
 // The same rule with a `BYWEEKNO` list.
 //
@@ -258,7 +356,20 @@ pub fn with_by_yearday(r: Rrule, by_yearday: [Int]) -> Rrule []
 //     println("${r.by_weekno[0]}")           // 20
 // ```
 pub fn with_by_weekno(r: Rrule, by_weekno: [Int]) -> Rrule []
-    todo("rrule-nv.rrulespec.with_by_weekno")
+    Rrule {
+        freq: r.freq,
+        interval: r.interval,
+        end: r.end,
+        wkst: r.wkst,
+        by_second: r.by_second,
+        by_minute: r.by_minute,
+        by_hour: r.by_hour,
+        by_day: r.by_day,
+        by_monthday: r.by_monthday,
+        by_yearday: r.by_yearday,
+        by_weekno: by_weekno[:],
+        by_month: r.by_month,
+        by_setpos: r.by_setpos }
 
 // The same rule with a `BYSETPOS` list.
 //
@@ -273,7 +384,20 @@ pub fn with_by_weekno(r: Rrule, by_weekno: [Int]) -> Rrule []
 //     println("${list.len(rrulespec.with_by_setpos(r, [-1]).by_setpos)}")    // 1
 // ```
 pub fn with_by_setpos(r: Rrule, by_setpos: [Int]) -> Rrule []
-    todo("rrule-nv.rrulespec.with_by_setpos")
+    Rrule {
+        freq: r.freq,
+        interval: r.interval,
+        end: r.end,
+        wkst: r.wkst,
+        by_second: r.by_second,
+        by_minute: r.by_minute,
+        by_hour: r.by_hour,
+        by_day: r.by_day,
+        by_monthday: r.by_monthday,
+        by_yearday: r.by_yearday,
+        by_weekno: r.by_weekno,
+        by_month: r.by_month,
+        by_setpos: by_setpos[:] }
 
 // The same rule with `BYHOUR`, `BYMINUTE` and `BYSECOND` lists.
 //
@@ -290,9 +414,22 @@ pub fn with_by_setpos(r: Rrule, by_setpos: [Int]) -> Rrule []
 //     println("${list.len(r.by_hour)}")      // 2
 // ```
 pub fn with_by_time(r: Rrule, by_hour: [Int], by_minute: [Int], by_second: [Int]) -> Rrule []
-    todo("rrule-nv.rrulespec.with_by_time")
+    Rrule {
+        freq: r.freq,
+        interval: r.interval,
+        end: r.end,
+        wkst: r.wkst,
+        by_second: by_second[:],
+        by_minute: by_minute[:],
+        by_hour: by_hour[:],
+        by_day: r.by_day,
+        by_monthday: r.by_monthday,
+        by_yearday: r.by_yearday,
+        by_weekno: r.by_weekno,
+        by_month: r.by_month,
+        by_setpos: r.by_setpos }
 
-// What a `BYxxx` part does in THIS rule: expand, limit, or nothing.
+// What a `BYxxx` part does in this rule: expand, limit, or nothing.
 //
 // RFC 5545 § 3.3.10's table, as a total function, with the two `BYDAY`
 // footnotes folded in — which is why it takes the whole rule and not
@@ -307,7 +444,17 @@ pub fn with_by_time(r: Rrule, by_hour: [Int], by_minute: [Int], by_second: [Int]
 //     println(rrulespec.role_name(rrulespec.part_role(weekly, RrulePartByMonth)))
 // ```
 pub fn part_role(r: Rrule, part: rrulefreq.RrulePart) -> RruleExpansion []
-    todo("rrule-nv.rrulespec.part_role")
+    let f = r.freq
+    match part
+        RrulePartBySetPos   => RruleLimits
+        RrulePartByMonth    => expands_only_under(f, [RruleYearly])
+        RrulePartByWeekNo   => only_under(f, RruleYearly)
+        RrulePartByYearDay  => year_day_role(f)
+        RrulePartByMonthDay => month_day_role(f)
+        RrulePartByDay      => day_role(r)
+        RrulePartByHour     => finer_limit(f, 3)
+        RrulePartByMinute   => finer_limit(f, 2)
+        RrulePartBySecond   => finer_limit(f, 1)
 
 // The role as a stable name: `"expands"`, `"limits"`,
 // `"not-applicable"`.
@@ -319,7 +466,10 @@ pub fn part_role(r: Rrule, part: rrulefreq.RrulePart) -> RruleExpansion []
 //     println(rrulespec.role_name(RruleLimits))      // limits
 // ```
 pub fn role_name(e: RruleExpansion) -> Str []
-    todo("rrule-nv.rrulespec.role_name")
+    match e
+        RruleExpands       => "expands"
+        RruleLimits        => "limits"
+        RruleNotApplicable => "not-applicable"
 
 // Whether the rule generates finitely many occurrences.
 //
@@ -333,7 +483,9 @@ pub fn role_name(e: RruleExpansion) -> Str []
 //     println("${rrulespec.is_finite(rrulespec.rule(RruleDaily))}")     // false
 // ```
 pub fn is_finite(r: Rrule) -> Bool []
-    todo("rrule-nv.rrulespec.is_finite")
+    match r.end
+        RruleNever => false
+        _          => true
 
 // The `COUNT`, or `None` when the rule does not end with one.
 //
@@ -346,7 +498,9 @@ pub fn is_finite(r: Rrule) -> Bool []
 //         None    => println("this rule has no COUNT")
 // ```
 pub fn end_count(e: RruleEnd) -> ?Int []
-    todo("rrule-nv.rrulespec.end_count")
+    match e
+        RruleCount(n) => Some(n)
+        _             => None
 
 // Every problem with the rule, or an empty list when there is none.
 //
@@ -363,4 +517,119 @@ pub fn end_count(e: RruleEnd) -> ?Int []
 //     println("${list.len(rrulespec.check(bad))}")      // 1
 // ```
 pub fn check(r: Rrule) -> [rruleerror.RruleError] []
-    todo("rrule-nv.rrulespec.check")
+    var out: [rruleerror.RruleError] = []
+    if r.interval < 1
+        list.push(out, RruleIntervalNotPositive(r.interval))
+    if let RruleCount(n) = r.end
+        if n < 1
+            list.push(out, RruleValueOutOfRange("COUNT", n))
+    check_range(out, "BYSECOND", r.by_second, 0, 60, false)
+    check_range(out, "BYMINUTE", r.by_minute, 0, 59, false)
+    check_range(out, "BYHOUR", r.by_hour, 0, 23, false)
+    check_range(out, "BYMONTHDAY", r.by_monthday, 1, 31, true)
+    check_range(out, "BYYEARDAY", r.by_yearday, 1, 366, true)
+    check_range(out, "BYWEEKNO", r.by_weekno, 1, 53, true)
+    check_range(out, "BYMONTH", r.by_month, 1, 12, false)
+    check_range(out, "BYSETPOS", r.by_setpos, 1, 366, true)
+    let freq = rrulefreq.freq_name(r.freq)
+    if list.len(r.by_weekno) > 0 and r.freq != RruleYearly
+        list.push(out, RruleByWeekNoNeedsYearly)
+    if list.len(r.by_yearday) > 0 and part_role(r, RrulePartByYearDay) == RruleNotApplicable
+        list.push(out, RrulePartNotApplicable("BYYEARDAY", freq))
+    if list.len(r.by_monthday) > 0 and part_role(r, RrulePartByMonthDay) == RruleNotApplicable
+        list.push(out, RrulePartNotApplicable("BYMONTHDAY", freq))
+    for w in r.by_day
+        if w.ordinal < -53 or w.ordinal > 53
+            list.push(out, RruleValueOutOfRange("BYDAY", w.ordinal))
+        else if w.ordinal != 0 and r.freq != RruleMonthly and r.freq != RruleYearly
+            list.push(out,
+                RruleOrdinalWeekdayNeedsMonthlyOrYearly(rrulefreq.weekday_code(w.weekday), w.ordinal))
+    if list.len(r.by_setpos) > 0 and not has_other_part(r)
+        list.push(out, RruleBySetPosWithoutOtherPart)
+    out
+
+// Expands under the frequencies listed, limits under every other.
+fn expands_only_under(f: rrulefreq.RruleFreq, expanding: [rrulefreq.RruleFreq]) -> RruleExpansion
+    if list.contains(expanding, f)
+        RruleExpands
+    else
+        RruleLimits
+
+// Expands under `f` if it is `only`, and does not apply otherwise.
+fn only_under(f: rrulefreq.RruleFreq, only: rrulefreq.RruleFreq) -> RruleExpansion
+    if f == only
+        RruleExpands
+    else
+        RruleNotApplicable
+
+// `BYYEARDAY`: limits under the three finest frequencies, expands
+// under `YEARLY`, and does not apply under the three between.
+fn year_day_role(f: rrulefreq.RruleFreq) -> RruleExpansion
+    match f
+        RruleYearly  => RruleExpands
+        RruleDaily   => RruleNotApplicable
+        RruleWeekly  => RruleNotApplicable
+        RruleMonthly => RruleNotApplicable
+        _            => RruleLimits
+
+// `BYMONTHDAY`: expands under `MONTHLY` and `YEARLY`, does not apply
+// under `WEEKLY`, and limits under the rest.
+fn month_day_role(f: rrulefreq.RruleFreq) -> RruleExpansion
+    match f
+        RruleYearly  => RruleExpands
+        RruleMonthly => RruleExpands
+        RruleWeekly  => RruleNotApplicable
+        _            => RruleLimits
+
+// `BYDAY`, with the table's two footnotes.
+fn day_role(r: Rrule) -> RruleExpansion
+    match r.freq
+        RruleWeekly  => RruleExpands
+        RruleMonthly => limits_when(list.len(r.by_monthday) > 0)
+        RruleYearly  => limits_when(list.len(r.by_monthday) > 0 or list.len(r.by_yearday) > 0)
+        _            => RruleLimits
+
+// Limits when `limit`, expands otherwise.
+fn limits_when(limit: Bool) -> RruleExpansion
+    if limit
+        RruleLimits
+    else
+        RruleExpands
+
+// The time parts: a part of rank `rank` (3 hour, 2 minute, 1 second)
+// limits under a frequency that fine or finer and expands under a
+// coarser one.
+fn finer_limit(f: rrulefreq.RruleFreq, rank: Int) -> RruleExpansion
+    if freq_rank(f) <= rank
+        RruleLimits
+    else
+        RruleExpands
+
+// The frequencies in order of length: 1 for `SECONDLY` to 7 for
+// `YEARLY`.
+fn freq_rank(f: rrulefreq.RruleFreq) -> Int
+    match f
+        RruleSecondly => 1
+        RruleMinutely => 2
+        RruleHourly   => 3
+        RruleDaily    => 4
+        RruleWeekly   => 5
+        RruleMonthly  => 6
+        RruleYearly   => 7
+
+// Whether the rule carries a `BYxxx` part other than `BYSETPOS`.
+fn has_other_part(r: Rrule) -> Bool
+    let n = list.len(r.by_second) + list.len(r.by_minute) + list.len(r.by_hour) + list.len(r.by_day)
+    n + list.len(r.by_monthday) + list.len(r.by_yearday) + list.len(r.by_weekno) + list.len(r.by_month) > 0
+
+// Add a `RruleValueOutOfRange` to `out` for each value outside
+// `low ..= high`, or outside `-high ..= -low` too when `signed`.
+fn check_range(var out: [rruleerror.RruleError], part: Str, values: [Int], low: Int, high: Int,
+               signed: Bool)
+    for v in values
+        let a = if signed and v < 0
+            -v
+        else
+            v
+        if a < low or a > high or v < 0 and not signed
+            list.push(out, RruleValueOutOfRange(part, v))

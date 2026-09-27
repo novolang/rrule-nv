@@ -1,30 +1,17 @@
-// rrulefreq.nv — the frequency, the nine `BYxxx` parts, and the
+// rrulefreq — the frequency, the nine `BYxxx` parts, and the
 // weekday-with-an-ordinal that `BYDAY` is made of.
 //
-// THE PARTS ARE A CLOSED SET, AND THEY ARE NAMED
-//
-// RFC 5545 § 3.3.10 defines nine `BYxxx` parts and no more.  They are
-// an enum here rather than nine fields checked by nine branches,
-// because the one table that decides what a rule MEANS — which parts
-// expand the set and which parts filter it — is a function of a
-// frequency and a part, and a function over two enums can be written
-// down once and read.  That table is in `rrulespec`, because its
-// answer for `BYDAY` depends on the rest of the rule.
-//
-// `BYDAY` IS A WEEKDAY AND AN ORDINAL, AND THE ORDINAL IS OFTEN ZERO
+// RFC 5545 section 3.3.10 defines nine `BYxxx` parts and no more.  They
+// are an enum here, so the table that decides what each part does,
+// `rrulespec.part_role`, is a function over two enums written down once.
 //
 // `MO` and `+1MO` are different values: the first is every Monday in
-// the interval, the second is the first Monday of it.  A library that
-// modelled `BYDAY` as a list of weekdays cannot say "the last Friday
-// of the month", which is most of what people write monthly rules
-// for.  So `RruleWeekdayNum` carries both, and an ordinal of zero
-// means every occurrence of that weekday — the specification's own
-// reading of a bare `MO`.
-//
-// A negative ordinal counts from the end: `-1SU` is the last Sunday.
-// That is why the field is a signed integer with a hole at zero
-// rather than an unsigned count.
+// the interval, the second the first Monday of it.  `RruleWeekdayNum`
+// carries both halves, and an ordinal of zero means every occurrence of
+// the weekday, which is how this package spells a bare `MO`.  A negative
+// ordinal counts from the end: `-1SU` is the last Sunday.
 
+use std.str
 use civil
 
 // How often a rule recurs, before any `BYxxx` part is applied.
@@ -82,7 +69,7 @@ pub enum RrulePart
     RrulePartByWeekNo
     // `BYMONTH`, `1 ..= 12`.
     RrulePartByMonth
-    // `BYSETPOS`, `1 ..= 366` or `-366 ..= -1`, applied LAST, to the
+    // `BYSETPOS`, `1 ..= 366` or `-366 ..= -1`, applied last, to the
     // set the other parts produced for one interval.
     RrulePartBySetPos
 
@@ -115,7 +102,14 @@ pub struct RruleWeekdayNum
 //     println(rrulefreq.freq_name(RruleWeekly))      // WEEKLY
 // ```
 pub fn freq_name(f: RruleFreq) -> Str []
-    todo("rrule-nv.rrulefreq.freq_name")
+    match f
+        RruleSecondly => "SECONDLY"
+        RruleMinutely => "MINUTELY"
+        RruleHourly   => "HOURLY"
+        RruleDaily    => "DAILY"
+        RruleWeekly   => "WEEKLY"
+        RruleMonthly  => "MONTHLY"
+        RruleYearly   => "YEARLY"
 
 // The frequency a name denotes, or `None`.
 //
@@ -132,7 +126,15 @@ pub fn freq_name(f: RruleFreq) -> Str []
 //         None    => println("not a frequency")
 // ```
 pub fn freq_named(name: Str) -> ?RruleFreq []
-    todo("rrule-nv.rrulefreq.freq_named")
+    match str.upper(name)
+        "SECONDLY" => Some(RruleSecondly)
+        "MINUTELY" => Some(RruleMinutely)
+        "HOURLY"   => Some(RruleHourly)
+        "DAILY"    => Some(RruleDaily)
+        "WEEKLY"   => Some(RruleWeekly)
+        "MONTHLY"  => Some(RruleMonthly)
+        "YEARLY"   => Some(RruleYearly)
+        _          => None
 
 // The part's name as RFC 5545 spells it, in upper case: `"BYSECOND"`
 // through `"BYSETPOS"`.
@@ -144,7 +146,16 @@ pub fn freq_named(name: Str) -> ?RruleFreq []
 //     println(rrulefreq.part_name(RrulePartBySetPos))    // BYSETPOS
 // ```
 pub fn part_name(p: RrulePart) -> Str []
-    todo("rrule-nv.rrulefreq.part_name")
+    match p
+        RrulePartBySecond   => "BYSECOND"
+        RrulePartByMinute   => "BYMINUTE"
+        RrulePartByHour     => "BYHOUR"
+        RrulePartByDay      => "BYDAY"
+        RrulePartByMonthDay => "BYMONTHDAY"
+        RrulePartByYearDay  => "BYYEARDAY"
+        RrulePartByWeekNo   => "BYWEEKNO"
+        RrulePartByMonth    => "BYMONTH"
+        RrulePartBySetPos   => "BYSETPOS"
 
 // The part a name denotes, or `None`.
 //
@@ -161,7 +172,17 @@ pub fn part_name(p: RrulePart) -> Str []
 //         None    => println("not a part RFC 5545 defines")
 // ```
 pub fn part_named(name: Str) -> ?RrulePart []
-    todo("rrule-nv.rrulefreq.part_named")
+    match str.upper(name)
+        "BYSECOND"   => Some(RrulePartBySecond)
+        "BYMINUTE"   => Some(RrulePartByMinute)
+        "BYHOUR"     => Some(RrulePartByHour)
+        "BYDAY"      => Some(RrulePartByDay)
+        "BYMONTHDAY" => Some(RrulePartByMonthDay)
+        "BYYEARDAY"  => Some(RrulePartByYearDay)
+        "BYWEEKNO"   => Some(RrulePartByWeekNo)
+        "BYMONTH"    => Some(RrulePartByMonth)
+        "BYSETPOS"   => Some(RrulePartBySetPos)
+        _            => None
 
 // A weekday with an ordinal.
 //
@@ -176,7 +197,7 @@ pub fn part_named(name: Str) -> ?RrulePart []
 //     println(rrulefreq.weekday_num_text(rrulefreq.weekday_num(Mon, 0)))   // MO
 // ```
 pub fn weekday_num(weekday: civil.Weekday, ordinal: Int) -> RruleWeekdayNum []
-    todo("rrule-nv.rrulefreq.weekday_num")
+    RruleWeekdayNum { weekday: weekday, ordinal: ordinal }
 
 // The value as RFC 5545 writes it: `"MO"`, `"+1MO"`, `"-1SU"`.
 //
@@ -192,7 +213,13 @@ pub fn weekday_num(weekday: civil.Weekday, ordinal: Int) -> RruleWeekdayNum []
 //     println(rrulefreq.weekday_num_text(rrulefreq.weekday_num(Sun, 1)))   // +1SU
 // ```
 pub fn weekday_num_text(w: RruleWeekdayNum) -> Str []
-    todo("rrule-nv.rrulefreq.weekday_num_text")
+    let code = weekday_code(w.weekday)
+    if w.ordinal > 0
+        "+${w.ordinal}${code}"
+    else if w.ordinal < 0
+        "${w.ordinal}${code}"
+    else
+        code
 
 // The value a `BYDAY` item denotes, or `None`.
 //
@@ -210,7 +237,18 @@ pub fn weekday_num_text(w: RruleWeekdayNum) -> Str []
 //         None    => println("not a BYDAY value")
 // ```
 pub fn weekday_num_parse(text: Str) -> ?RruleWeekdayNum []
-    todo("rrule-nv.rrulefreq.weekday_num_parse")
+    let n = str.len(text)
+    if n < 2
+        return None
+    let Some(day) = weekday_coded(str.slice(text, n - 2, n)) else
+        return None
+    if n == 2
+        return Some(weekday_num(day, 0))
+    let Some(ordinal) = str.to_int(str.slice(text, 0, n - 2)) else
+        return None
+    if ordinal == 0 or ordinal < -53 or ordinal > 53
+        return None
+    Some(weekday_num(day, ordinal))
 
 // The weekday's two-letter code as RFC 5545 spells it: `"MO"`
 // through `"SU"`.
@@ -226,7 +264,14 @@ pub fn weekday_num_parse(text: Str) -> ?RruleWeekdayNum []
 //     println(rrulefreq.weekday_code(Thu))        // TH
 // ```
 pub fn weekday_code(w: civil.Weekday) -> Str []
-    todo("rrule-nv.rrulefreq.weekday_code")
+    match w
+        Mon => "MO"
+        Tue => "TU"
+        Wed => "WE"
+        Thu => "TH"
+        Fri => "FR"
+        Sat => "SA"
+        Sun => "SU"
 
 // The weekday a two-letter code denotes, or `None`.
 //
@@ -239,4 +284,12 @@ pub fn weekday_code(w: civil.Weekday) -> Str []
 //         None    => println("not a weekday code")
 // ```
 pub fn weekday_coded(code: Str) -> ?civil.Weekday []
-    todo("rrule-nv.rrulefreq.weekday_coded")
+    match str.upper(code)
+        "MO" => Some(Mon)
+        "TU" => Some(Tue)
+        "WE" => Some(Wed)
+        "TH" => Some(Thu)
+        "FR" => Some(Fri)
+        "SA" => Some(Sat)
+        "SU" => Some(Sun)
+        _    => None

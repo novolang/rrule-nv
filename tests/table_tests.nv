@@ -1,0 +1,144 @@
+// tests/table_tests.nv — RFC 5545 section 3.3.10's whole table, every
+// check `rrulespec.check` makes, and every name the package spells.
+//
+// The table below is the RFC's, a row per part and a column per
+// frequency from SECONDLY to YEARLY: L limits, E expands, N does not
+// apply.  The two BYDAY cells with footnotes are asserted in
+// tests/rrulespec_tests.nv, and here for a rule with no other part.
+
+use std.test
+use std.str
+use std.list
+use civil
+use rruleerror
+use rrulefreq
+use rrulespec
+
+// The letter a role is written as in the table.
+fn letter(e: RruleExpansion) -> Str
+    match e
+        RruleExpands       => "E"
+        RruleLimits        => "L"
+        RruleNotApplicable => "N"
+
+// The seven frequencies, finest first.
+fn freqs() -> [rrulefreq.RruleFreq]
+    [RruleSecondly, RruleMinutely, RruleHourly, RruleDaily, RruleWeekly, RruleMonthly, RruleYearly]
+
+// A table row for one part: its role under each frequency.
+fn row(part: rrulefreq.RrulePart) -> Str
+    var out = ""
+    for f in freqs()
+        out = "${out}${letter(rrulespec.part_role(rrulespec.rule(f), part))}"
+    out
+
+@test
+fn test_the_expansion_table_row_by_row()
+    test.assert_eq(row(RrulePartByMonth), "LLLLLLE")
+    test.assert_eq(row(RrulePartByWeekNo), "NNNNNNE")
+    test.assert_eq(row(RrulePartByYearDay), "LLLNNNE")
+    test.assert_eq(row(RrulePartByMonthDay), "LLLLNEE")
+    test.assert_eq(row(RrulePartByDay), "LLLLEEE")
+    test.assert_eq(row(RrulePartByHour), "LLLEEEE")
+    test.assert_eq(row(RrulePartByMinute), "LLEEEEE")
+    test.assert_eq(row(RrulePartBySecond), "LEEEEEE")
+    test.assert_eq(row(RrulePartBySetPos), "LLLLLLL")
+    test.assert_eq(rrulespec.role_name(RruleNotApplicable), "not-applicable")
+    let yearly = rrulespec.with_by_yearday(rrulespec.rule(RruleYearly), [100])
+    test.assert_eq(rrulespec.role_name(rrulespec.part_role(yearly, RrulePartByDay)), "limits")
+
+// The codes of every problem `check` finds.
+fn codes(r: rrulespec.Rrule) -> Str
+    var out: [Str] = []
+    for e in rrulespec.check(r)
+        list.push(out, rruleerror.code(e))
+    str.join(out, " ")
+
+@test
+fn test_every_check_the_rule_gets()
+    let daily = rrulespec.rule(RruleDaily)
+    test.assert_eq(codes(rrulespec.with_end(daily, RruleCount(0))), "value-out-of-range")
+    test.assert_eq(codes(rrulespec.with_by_time(daily, [24], [60], [61])),
+                   "value-out-of-range value-out-of-range value-out-of-range")
+    let yearly = rrulespec.rule(RruleYearly)
+    test.assert_eq(codes(rrulespec.with_by_monthday(yearly, [0, -32, 31, -31])),
+        "value-out-of-range value-out-of-range")
+    test.assert_eq(codes(rrulespec.with_by_yearday(yearly, [367])), "value-out-of-range")
+    test.assert_eq(codes(rrulespec.with_by_weekno(yearly, [54])), "value-out-of-range")
+    test.assert_eq(codes(rrulespec.with_by_month(yearly, [0, -1])), "value-out-of-range value-out-of-range")
+    test.assert_eq(codes(rrulespec.with_by_setpos(rrulespec.with_by_month(yearly, [1]), [367])),
+        "value-out-of-range")
+    test.assert_eq(codes(rrulespec.with_by_day(yearly, [rrulefreq.weekday_num(Mon, 54)])), "value-out-of-range")
+    test.assert_eq(codes(rrulespec.with_by_yearday(rrulespec.rule(RruleMonthly), [1])), "part-not-applicable")
+    test.assert_eq(codes(rrulespec.with_by_monthday(rrulespec.rule(RruleWeekly), [1])), "part-not-applicable")
+    test.assert_eq(codes(rrulespec.with_by_day(rrulespec.rule(RruleWeekly), [rrulefreq.weekday_num(Mon, 1)])),
+                   "ordinal-weekday-needs-monthly-or-yearly")
+    test.assert_eq(codes(rrulespec.with_by_day(yearly, [rrulefreq.weekday_num(Mon, -1)])), "")
+
+@test
+fn test_an_end_answers_its_count_and_its_finiteness()
+    let until = rrulespec.with_end(rrulespec.rule(RruleDaily),
+        RruleUntil(civil.datetime(civil.date(2026, 1, 1)!, civil.midnight()), RruleUntilUtc))
+    test.assert_eq(rrulespec.is_finite(until), true)
+    test.assert_eq(rrulespec.end_count(until.end) == None, true)
+
+@test
+fn test_every_frequency_and_part_name_goes_both_ways()
+    for f in freqs()
+        match rrulefreq.freq_named(str.lower(rrulefreq.freq_name(f)))
+            Some(back) => test.assert_eq(rrulefreq.freq_name(back), rrulefreq.freq_name(f))
+            None       => test.fail(rrulefreq.freq_name(f))
+    test.assert_eq(rrulefreq.freq_named("FORTNIGHTLY") == None, true)
+    let parts = [RrulePartBySecond, RrulePartByMinute, RrulePartByHour, RrulePartByDay, RrulePartByMonthDay,
+                 RrulePartByYearDay, RrulePartByWeekNo, RrulePartByMonth, RrulePartBySetPos]
+    for p in parts
+        match rrulefreq.part_named(str.lower(rrulefreq.part_name(p)))
+            Some(back) => test.assert_eq(rrulefreq.part_name(back), rrulefreq.part_name(p))
+            None       => test.fail(rrulefreq.part_name(p))
+
+@test
+fn test_every_weekday_code_goes_both_ways()
+    let days = [Mon, Tue, Wed, Thu, Fri, Sat, Sun]
+    for d in days
+        match rrulefreq.weekday_coded(str.lower(rrulefreq.weekday_code(d)))
+            Some(back) => test.assert_eq(civil.weekday_number(back), civil.weekday_number(d))
+            None       => test.fail(rrulefreq.weekday_code(d))
+    test.assert_eq(rrulefreq.weekday_coded("XX") == None, true)
+    test.assert_eq(rrulefreq.weekday_num_text(rrulefreq.weekday_num(Fri, -2)), "-2FR")
+    test.assert_eq(rrulefreq.weekday_num_parse("1FR") != None, true)
+    test.assert_eq(rrulefreq.weekday_num_parse("F") == None, true)
+    test.assert_eq(rrulefreq.weekday_num_parse("0FR") == None, true)
+    test.assert_eq(rrulefreq.weekday_num_parse("54FR") == None, true)
+    test.assert_eq(rrulefreq.weekday_num_parse("xFR") == None, true)
+    test.assert_eq(rrulefreq.weekday_num_parse("1XX") == None, true)
+
+@test
+fn test_every_refusal_has_a_message_a_code_and_a_side()
+    let all = [RruleMissingFreq, RruleUnknownPart("BYFORTNIGHT"), RruleDuplicatePart("COUNT"), RruleBothCountAndUntil,
+               RruleUntilKindMismatch("date", "utc"), RruleValueOutOfRange("BYMONTH", 13), RruleIntervalNotPositive(0),
+               RruleBySetPosWithoutOtherPart, RruleByWeekNoNeedsYearly, RruleOrdinalWeekdayNeedsMonthlyOrYearly("MO", 1),
+               RruleUnboundedRecurrence, RrulePartNotApplicable("BYYEARDAY", "MONTHLY"), RruleBadValue("COUNT", "ten"),
+               RruleWrongProperty("EXDATE"), RruleTimePartWithDate("BYHOUR")]
+    var lines: [Str] = []
+    var grammar = 0
+    for e in all
+        list.push(lines, "${rruleerror.code(e)}: ${e.message()}")
+        if rruleerror.is_grammar_fault(e)
+            grammar = grammar + 1
+    test.assert_eq(grammar, 5)
+    let want = ["missing-freq: the rule has no FREQ part",
+                "unknown-part: unknown part BYFORTNIGHT",
+                "duplicate-part: the part COUNT appears twice",
+                "both-count-and-until: COUNT and UNTIL must not both appear",
+                "until-kind-mismatch: UNTIL is a utc value and DTSTART a date one",
+                "value-out-of-range: BYMONTH value 13 is out of range",
+                "interval-not-positive: INTERVAL 0 is not positive",
+                "by-set-pos-without-other-part: BYSETPOS needs another BYxxx part to select from",
+                "by-week-no-needs-yearly: BYWEEKNO needs FREQ=YEARLY",
+                "ordinal-weekday-needs-monthly-or-yearly: BYDAY 1MO needs FREQ=MONTHLY or FREQ=YEARLY",
+                "unbounded-recurrence: the recurrence has no end",
+                "part-not-applicable: BYYEARDAY does not apply under FREQ=MONTHLY",
+                "bad-value: COUNT value 'ten' is not valid",
+                "wrong-property: the line is EXDATE, not RRULE",
+                "time-part-with-date: BYHOUR needs a DTSTART with a time of day"]
+    test.assert_eq(lines, want)

@@ -1,14 +1,9 @@
-// rrulespec_tests.nv — RFC 5545 § 3.3.10's expansion/limitation
-// table, asserted cell by cell.
+// tests/rrulespec_tests.nv — RFC 5545 section 3.3.10's expansion and
+// limitation table, asserted cell by cell, and the checks on a rule.
 //
-// RED ON PURPOSE: every assertion reaches `not implemented:
-// rrule-nv.<module>.<fn>`.
-//
-// This is the suite that matters most.  A wrong cell in that table
-// produces a rule that RUNS and generates the wrong series, with
-// nothing raised and nothing logged, so the table is checked against
-// the specification's own printed copy rather than against an
-// implementation's behaviour.
+// A wrong cell produces a rule that runs and generates the wrong
+// series, with nothing raised, so the table is checked against the
+// specification's printed copy.
 
 use std.test
 use civil
@@ -48,9 +43,9 @@ fn test_byday_changes_role_with_the_rest_of_the_rule() [io]
     test.assert(rrulespec.role_name(rrulespec.part_role(both, RrulePartByDay))
                 == "limits")
 
-    test.case("and that is `Friday the 13th`, not `every Friday and every 13th`")
+    test.case("and that is Friday the 13th: the 13ths expand, the Fridays limit them")
     test.assert(rrulespec.role_name(rrulespec.part_role(both, RrulePartByMonthDay))
-                == "limits")
+                == "expands")
 
 @test
 fn test_a_part_that_does_not_apply_is_named_rather_than_ignored() [io]

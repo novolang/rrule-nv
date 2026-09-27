@@ -1,53 +1,31 @@
-// rruleset.nv — a `DTSTART`, the rules that generate from it, and the
+// rruleset — a `DTSTART`, the rules that generate from it, and the
 // dates added and removed by hand.
 //
-// A RECURRENCE IS NOT A RULE.  IT IS A SET.
+// A recurrence is a set, not a rule.  RFC 5545 section 3.8.5 builds it
+// from four properties: `RRULE` generates, `RDATE` adds, `EXDATE`
+// removes, and `DTSTART` anchors the whole.  Exclusion is applied last,
+// so a date in both `RDATE` and `EXDATE` is excluded.  The weekly
+// meeting that moved once and was cancelled twice is a set.
 //
-// RFC 5545 § 3.8.5 builds the recurrence set from four properties:
-// `RRULE` generates, `RDATE` adds, `EXDATE` removes, and `DTSTART`
-// anchors the whole of it.  The order is fixed and it matters:
-// exclusion happens LAST, so a date in both `RDATE` and `EXDATE` is
-// excluded.  A library that exposed only the rule cannot express the
-// series everybody actually has — the weekly meeting, moved once,
-// cancelled twice.
+// `DTSTART` is always the first occurrence.  RFC 5545 section 3.8.5.3
+// says so, and it also says that a `DTSTART` the rule would not have
+// produced gives an undefined set.  `DTSTART=2026-01-07`, a Wednesday,
+// with `FREQ=WEEKLY;BYDAY=MO` is such a case, and implementations
+// disagree about it.  This package yields the `DTSTART`, as the
+// normative sentence says, and a `COUNT` counts it.  `is_synchronized`
+// tells a caller when the rule would not have produced it.
 //
-// `DTSTART` IS ALWAYS THE FIRST OCCURRENCE, AND WHEN IT SHOULD NOT BE
-// THE CALLER IS TOLD
-//
-// Here is the one place the specification leaves a hole and every
-// implementation fills it differently.  RFC 5545 § 3.8.5.3 says the
-// `DTSTART` counts as the first recurrence instance, and it also says
-// that a `DTSTART` not synchronised with the rule gives an UNDEFINED
-// recurrence set.  So `DTSTART=2026-01-07` — a Wednesday — with
-// `FREQ=WEEKLY;BYDAY=MO` has a first occurrence that the rule would
-// never have produced, and the reference implementations disagree
-// about whether to yield it.
-//
-// This package yields it, because that is what the specification's
-// normative sentence says and because dropping a start date silently
-// loses the one occurrence the organiser definitely meant.  And
-// `is_synchronized` is published, so a caller who wants the other
-// behaviour can detect the case and a calendar editor can warn about
-// it at the moment the rule is written rather than never.
-//
-// THE OCCURRENCES ARE CIVIL, AND THERE IS NO ZONE HERE
-//
-// Every date in a set is one of calendar-nv's civil values: a wall
-// clock with no zone attached.  That is not a simplification, it is
-// what RFC 5545 means — a recurrence is defined on the local
-// calendar, which is why a daily 09:00 meeting stays at 09:00 across
-// a daylight-saving change while the instant it names moves by an
-// hour.
-//
-// Converting each civil occurrence to an instant is a separate step
-// with its own failure mode — twice a year a wall time happened twice
-// or never happened — and tz-nv is the package that answers it.
-// Keeping that out is what lets this package be `core`, and what lets
-// a test generate a year of occurrences with no clock and no zone
-// database.
+// Every date here is one of calendar-nv's civil values: a wall clock
+// with no zone.  A recurrence is defined on the local calendar, so a
+// daily 09:00 meeting stays at 09:00 across a daylight-saving change and
+// the instant it names moves by an hour.  Converting an occurrence to an
+// instant is tz-nv's.  Nanoseconds in a date are dropped: RFC 5545 times
+// are whole seconds.
 
+use std.list
 use civil
 use rruleerror
+use rrulegen
 use rrulespec
 
 // A recurrence set: where it starts, what generates it, and what was
@@ -105,7 +83,7 @@ pub struct RruleSet
 //             println("${rruleset.is_date_valued(s)}")    // true
 // ```
 pub fn set(dtstart: civil.CivilDateTime, date_valued: Bool) -> RruleSet []
-    todo("rrule-nv.rruleset.set")
+    RruleSet { dtstart: dtstart, date_valued: date_valued, rules: [], rdates: [], exdates: [] }
 
 // The same set with one more `RRULE`.
 //
@@ -122,7 +100,13 @@ pub fn set(dtstart: civil.CivilDateTime, date_valued: Bool) -> RruleSet []
 //             println("${rruleset.rule_count(rruleset.with_rule(s, rrulespec.rule(RruleWeekly)))}")
 // ```
 pub fn with_rule(s: RruleSet, r: rrulespec.Rrule) -> RruleSet []
-    todo("rrule-nv.rruleset.with_rule")
+    var rules = s.rules[:]
+    list.push(rules, r)
+    RruleSet { dtstart: s.dtstart,
+        date_valued: s.date_valued,
+        rules: rules,
+        rdates: s.rdates[:],
+        exdates: s.exdates[:] }
 
 // The same set with one more `RDATE`.
 //
@@ -142,11 +126,17 @@ pub fn with_rule(s: RruleSet, r: rrulespec.Rrule) -> RruleSet []
 //             println("${list.len(rruleset.with_rdate(s, civil.datetime(d, civil.midnight())).rdates)}")
 // ```
 pub fn with_rdate(s: RruleSet, at: civil.CivilDateTime) -> RruleSet []
-    todo("rrule-nv.rruleset.with_rdate")
+    var rdates = s.rdates[:]
+    list.push(rdates, at)
+    RruleSet { dtstart: s.dtstart,
+        date_valued: s.date_valued,
+        rules: s.rules[:],
+        rdates: rdates,
+        exdates: s.exdates[:] }
 
 // The same set with one more `EXDATE`.
 //
-// Exclusion is applied LAST, so an instant that is both an `RDATE`
+// Exclusion is applied last, so an instant that is both an `RDATE`
 // and an `EXDATE` is excluded.  RFC 5545 § 3.8.5.1 fixes that order,
 // and the other order produces a cancelled meeting that reappears.
 //
@@ -162,7 +152,13 @@ pub fn with_rdate(s: RruleSet, at: civil.CivilDateTime) -> RruleSet []
 //             println("${list.len(rruleset.with_exdate(s, civil.datetime(d, civil.midnight())).exdates)}")
 // ```
 pub fn with_exdate(s: RruleSet, at: civil.CivilDateTime) -> RruleSet []
-    todo("rrule-nv.rruleset.with_exdate")
+    var exdates = s.exdates[:]
+    list.push(exdates, at)
+    RruleSet { dtstart: s.dtstart,
+        date_valued: s.date_valued,
+        rules: s.rules[:],
+        rdates: s.rdates[:],
+        exdates: exdates }
 
 // The set's `DTSTART`.
 //
@@ -178,7 +174,7 @@ pub fn with_exdate(s: RruleSet, at: civil.CivilDateTime) -> RruleSet []
 //             println("${rruleset.dtstart_of(s).date.day}")    // 5
 // ```
 pub fn dtstart_of(s: RruleSet) -> civil.CivilDateTime []
-    todo("rrule-nv.rruleset.dtstart_of")
+    s.dtstart
 
 // Whether the set is date-valued — a whole-day series.
 //
@@ -198,7 +194,7 @@ pub fn dtstart_of(s: RruleSet) -> civil.CivilDateTime []
 //             println("${rruleset.is_date_valued(s)}")     // false
 // ```
 pub fn is_date_valued(s: RruleSet) -> Bool []
-    todo("rrule-nv.rruleset.is_date_valued")
+    s.date_valued
 
 // How many `RRULE` properties the set carries.
 //
@@ -214,7 +210,7 @@ pub fn is_date_valued(s: RruleSet) -> Bool []
 //             println("${rruleset.rule_count(s)}")         // 0
 // ```
 pub fn rule_count(s: RruleSet) -> Int []
-    todo("rrule-nv.rruleset.rule_count")
+    list.len(s.rules)
 
 // Whether the rules would themselves have produced the `DTSTART`.
 //
@@ -238,7 +234,15 @@ pub fn rule_count(s: RruleSet) -> Int []
 //             println("${rruleset.is_synchronized(rruleset.with_rule(s, weekly))}")
 // ```
 pub fn is_synchronized(s: RruleSet) -> Bool []
-    todo("rrule-nv.rruleset.is_synchronized")
+    for r in s.rules
+        let p = rrulegen.plan(r, s.dtstart)
+        match rrulegen.first_from(p, p.start)
+            Some(o) =>
+                if o != p.start
+                    return false
+            None    =>
+                return false
+    true
 
 // Every problem with the set, or an empty list when there is none.
 //
@@ -260,4 +264,32 @@ pub fn is_synchronized(s: RruleSet) -> Bool []
 //             println("${list.len(rruleset.check_set(s))}")     // 0
 // ```
 pub fn check_set(s: RruleSet) -> [rruleerror.RruleError] []
-    todo("rrule-nv.rruleset.check_set")
+    var out: [rruleerror.RruleError] = []
+    let start_kind = if s.date_valued
+        "date"
+    else
+        "local"
+    for r in s.rules
+        for e in rrulespec.check(r)
+            list.push(out, e)
+        if let RruleUntil(_, kind) = r.end
+            if (kind == RruleUntilDate) != s.date_valued
+                list.push(out, RruleUntilKindMismatch(start_kind, kind_name(kind)))
+        if s.date_valued
+            add_time_part(out, "BYHOUR", r.by_hour)
+            add_time_part(out, "BYMINUTE", r.by_minute)
+            add_time_part(out, "BYSECOND", r.by_second)
+    out
+
+// The name `RruleUntilKindMismatch` gives an `UNTIL` kind.
+fn kind_name(k: rrulespec.RruleUntilKind) -> Str
+    match k
+        RruleUntilDate  => "date"
+        RruleUntilLocal => "local"
+        RruleUntilUtc   => "utc"
+
+// Add `RruleTimePartWithDate` to `out` when a date-valued set's rule
+// carries a time part.
+fn add_time_part(var out: [rruleerror.RruleError], part: Str, values: [Int])
+    if list.len(values) > 0
+        list.push(out, RruleTimePartWithDate(part))
