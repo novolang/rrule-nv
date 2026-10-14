@@ -148,7 +148,7 @@ fn plan(r: rrulespec.Rrule, dtstart: civil.CivilDateTime) -> Plan
         r.by_monthday[:]
     Plan {
         rank: rank,
-        step: r.interval,
+        step: held_step(rank, r.interval),
         start: start,
         until: until_of(r.end),
         count: count_of(r.end),
@@ -265,6 +265,23 @@ fn unit_seconds(rank: Int) -> Int
 // The epoch day of the start of the week holding epoch day `ed`.
 fn week_start(p: Plan, ed: Int) -> Int
     ed - (weekday_of_day(ed) - p.wkst + 7) % 7
+
+// An interval held to a count of its own unit that is far past the end
+// of the year 9999, which is where the search stops.  A longer interval
+// yields what the held one does, and the product of an interval with
+// its index stays inside an Int.
+fn held_step(rank: Int, interval: Int) -> Int
+    let most = match rank
+        7 => 100000
+        6 => 1000000
+        5 => 10000000
+        4 => 100000000
+        3 => 1000000000
+        2 => 100000000000
+        _ => 10000000000000
+    if interval > most
+        return most
+    interval
 
 // A month counted from year 0: `year * 12 + month - 1`.
 fn month_index(d: civil.CivilDate) -> Int

@@ -5,6 +5,12 @@ All notable changes to rrule-nv are recorded here. The format is
 package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 with the pre-1.0 rule that a breaking change bumps the MINOR number.
 
+## Unreleased
+
+### Fixed
+
+- An `INTERVAL` of any size is held to a count of its own unit that is past the year 9999, and a `COUNT` above 1000000 is `RruleValueOutOfRange`, because a cursor builds every occurrence under a `COUNT` when it is made.
+
 ## [0.1.0] — 2026-09-27
 
 RFC 5545 recurrence rules: the grammar in both directions, the

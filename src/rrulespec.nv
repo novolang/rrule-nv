@@ -520,8 +520,11 @@ pub fn check(r: Rrule) -> [rruleerror.RruleError] []
     var out: [rruleerror.RruleError] = []
     if r.interval < 1
         list.push(out, RruleIntervalNotPositive(r.interval))
+    // A cursor builds every occurrence under a COUNT when it is made, so
+    // a COUNT past a million is out of range rather than a request for
+    // that much memory.
     if let RruleCount(n) = r.end
-        if n < 1
+        if n < 1 or n > 1000000
             list.push(out, RruleValueOutOfRange("COUNT", n))
     check_range(out, "BYSECOND", r.by_second, 0, 60, false)
     check_range(out, "BYMINUTE", r.by_minute, 0, 59, false)

@@ -1,0 +1,44 @@
+// hostile_tests.nv — INTERVAL, COUNT and list parts as large as an Int
+// allows.
+
+use std.test
+use std.list
+use civil
+use rruleiter
+use rruleparse
+use rruleset
+
+fn start() -> civil.CivilDateTime
+    civil.datetime(CivilDate { year: 2026, month: 1, day: 31 }, civil.midnight())
+
+// How many of the first ten occurrences a rule yields; a rule that does
+// not parse yields none.
+fn yielded(rule: Str) -> Int [io]
+    match rruleparse.parse(rule)
+        Err(_) => 0
+        Ok(r)  => list.len(rruleiter.occurrences(rruleset.with_rule(rruleset.set(start(), false), r), 10))
+
+@test
+fn test_huge_interval_and_count_values_do_not_overflow() [io]
+    test.assert(yielded("FREQ=DAILY;INTERVAL=9223372036854775807") <= 10)
+    test.assert(yielded("FREQ=MONTHLY;INTERVAL=9223372036854775807") <= 10)
+    test.assert(yielded("FREQ=YEARLY;INTERVAL=4611686018427387904;COUNT=3") <= 3)
+    test.assert(yielded("FREQ=SECONDLY;INTERVAL=9223372036854775807") <= 10)
+    test.assert(yielded("FREQ=WEEKLY;INTERVAL=1000000000000000000;COUNT=5") <= 5)
+    test.assert(yielded("FREQ=DAILY;COUNT=9223372036854775807") == 0)
+    test.assert(yielded("FREQ=SECONDLY;COUNT=1000000000") == 0)
+    test.assert(yielded("FREQ=DAILY;COUNT=1000") == 10)
+    test.assert(yielded("FREQ=DAILY;INTERVAL=99999999999999999999") == 0)
+    test.assert(yielded("FREQ=DAILY;COUNT=99999999999999999999") == 0)
+
+@test
+fn test_huge_list_parts_are_refused() [io]
+    test.assert(yielded("FREQ=YEARLY;BYYEARDAY=9223372036854775807") == 0)
+    test.assert(yielded("FREQ=YEARLY;BYSETPOS=9223372036854775807;BYDAY=MO") <= 10)
+    test.assert(yielded("FREQ=YEARLY;BYWEEKNO=-9223372036854775807") == 0)
+    test.assert(yielded("FREQ=MONTHLY;BYMONTHDAY=" + "1,".repeat(50000) + "2") <= 10)
+
+@test
+fn test_rules_with_nothing_to_yield_stop_searching() [io]
+    test.assert(yielded("FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=30") <= 1)
+    test.assert(yielded("FREQ=SECONDLY;BYMONTH=2;BYMONTHDAY=30") <= 1)
