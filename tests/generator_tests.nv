@@ -14,6 +14,7 @@ use rruleiter
 use rruleparse
 use rrulespec
 use rruleset
+use rrulefreq
 
 // A field of `YYYYMMDDTHHMMSS` as a number.
 fn field(text: Str, from: Int, to: Int) -> Int

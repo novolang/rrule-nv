@@ -526,14 +526,14 @@ pub fn check(r: Rrule) -> [rruleerror.RruleError] []
     if let RruleCount(n) = r.end
         if n < 1 or n > 1000000
             list.push(out, RruleValueOutOfRange("COUNT", n))
-    check_range(out, "BYSECOND", r.by_second, 0, 60, false)
-    check_range(out, "BYMINUTE", r.by_minute, 0, 59, false)
-    check_range(out, "BYHOUR", r.by_hour, 0, 23, false)
-    check_range(out, "BYMONTHDAY", r.by_monthday, 1, 31, true)
-    check_range(out, "BYYEARDAY", r.by_yearday, 1, 366, true)
-    check_range(out, "BYWEEKNO", r.by_weekno, 1, 53, true)
-    check_range(out, "BYMONTH", r.by_month, 1, 12, false)
-    check_range(out, "BYSETPOS", r.by_setpos, 1, 366, true)
+    check_range(var out, "BYSECOND", r.by_second, 0, 60, false)
+    check_range(var out, "BYMINUTE", r.by_minute, 0, 59, false)
+    check_range(var out, "BYHOUR", r.by_hour, 0, 23, false)
+    check_range(var out, "BYMONTHDAY", r.by_monthday, 1, 31, true)
+    check_range(var out, "BYYEARDAY", r.by_yearday, 1, 366, true)
+    check_range(var out, "BYWEEKNO", r.by_weekno, 1, 53, true)
+    check_range(var out, "BYMONTH", r.by_month, 1, 12, false)
+    check_range(var out, "BYSETPOS", r.by_setpos, 1, 366, true)
     let freq = rrulefreq.freq_name(r.freq)
     if list.len(r.by_weekno) > 0 and r.freq != RruleYearly
         list.push(out, RruleByWeekNoNeedsYearly)

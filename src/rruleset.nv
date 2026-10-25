@@ -276,9 +276,9 @@ pub fn check_set(s: RruleSet) -> [rruleerror.RruleError] []
             if (kind == RruleUntilDate) != s.date_valued
                 list.push(out, RruleUntilKindMismatch(start_kind, kind_name(kind)))
         if s.date_valued
-            add_time_part(out, "BYHOUR", r.by_hour)
-            add_time_part(out, "BYMINUTE", r.by_minute)
-            add_time_part(out, "BYSECOND", r.by_second)
+            add_time_part(var out, "BYHOUR", r.by_hour)
+            add_time_part(var out, "BYMINUTE", r.by_minute)
+            add_time_part(var out, "BYSECOND", r.by_second)
     out
 
 // The name `RruleUntilKindMismatch` gives an `UNTIL` kind.

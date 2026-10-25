@@ -1,6 +1,6 @@
 [package]
 name        = "rrule-nv"
-version     = "0.1.0"
+version     = "0.1.1"
 description = "RFC 5545 recurrence rules over civil dates: the RECUR grammar parsed and printed, the BYxxx expansion and limit table published as a total function of the frequency, BYSETPOS applied per interval, RDATE and EXDATE sets, and occurrences generated through a cursor value that a caller must bound."
 license     = "Apache-2.0"
 # `experimental` because no program outside this repository has used the
@@ -21,7 +21,7 @@ repository  = "https://github.com/novolang/rrule-nv"
 maintainers = ["novo-lang"]
 # Lists as reference types, `if let` and negative indexing are in
 # 0.13.0.
-novo        = ">= 0.13.0"
+novo        = ">= 0.21.1"
 
 [docs.pages]
 "README.md" = "RFC 5545 recurrence rules over civil dates"

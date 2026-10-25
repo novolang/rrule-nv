@@ -126,19 +126,19 @@ pub fn print(r: rrulespec.Rrule) -> Str []
         list.push(parts, "COUNT=${n}")
     if r.interval != 1
         list.push(parts, "INTERVAL=${r.interval}")
-    add_ints(parts, "BYSECOND", r.by_second)
-    add_ints(parts, "BYMINUTE", r.by_minute)
-    add_ints(parts, "BYHOUR", r.by_hour)
+    add_ints(var parts, "BYSECOND", r.by_second)
+    add_ints(var parts, "BYMINUTE", r.by_minute)
+    add_ints(var parts, "BYHOUR", r.by_hour)
     if list.len(r.by_day) > 0
         var days: [Str] = []
         for w in r.by_day
             list.push(days, rrulefreq.weekday_num_text(w))
         list.push(parts, "BYDAY=${str.join(days, ",")}")
-    add_ints(parts, "BYMONTHDAY", r.by_monthday)
-    add_ints(parts, "BYYEARDAY", r.by_yearday)
-    add_ints(parts, "BYWEEKNO", r.by_weekno)
-    add_ints(parts, "BYMONTH", r.by_month)
-    add_ints(parts, "BYSETPOS", r.by_setpos)
+    add_ints(var parts, "BYMONTHDAY", r.by_monthday)
+    add_ints(var parts, "BYYEARDAY", r.by_yearday)
+    add_ints(var parts, "BYWEEKNO", r.by_weekno)
+    add_ints(var parts, "BYMONTH", r.by_month)
+    add_ints(var parts, "BYSETPOS", r.by_setpos)
     if wkst_text(r) != ""
         list.push(parts, "WKST=${wkst_text(r)}")
     str.join(parts, ";")
